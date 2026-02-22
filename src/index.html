@@ -1,0 +1,994 @@
+﻿<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Next OS Installer</title>
+  <style>
+
+    :root {
+      --primary: #ff8c00;
+      --primary-hover: #e67e00;
+      --primary-light: rgba(255, 140, 0, 0.15);
+      --bg-dark: #1a1b1e;
+      --bg-card: #2d2f31;
+      --bg-input: #1a1a1a;
+      --border: #444;
+      --text: #f0f0f0;
+      --text-muted: #999;
+      --success: #00c853;
+      --error: #ff5252;
+      --warning: #ffc107;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #2d2f31 0%, #1a1b1e 100%);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 2px solid var(--primary);
+    }
+    .header h1 {
+      font-size: 18px;
+      color: var(--primary);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .header .subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .stepper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 40px;
+      gap: 0;
+    }
+    .step-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-circle {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      transition: all 0.3s;
+    }
+    .step-circle.active {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: white;
+    }
+    .step-circle.done {
+      border-color: var(--success);
+      background: var(--success);
+      color: white;
+    }
+    .step-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      max-width: 80px;
+      text-align: center;
+      transition: color 0.3s;
+    }
+    .step-label.active { color: var(--primary); font-weight: 600; }
+    .step-label.done { color: var(--success); }
+    .step-line {
+      width: 40px; height: 2px;
+      background: var(--border);
+      margin: 0 8px;
+      transition: background 0.3s;
+    }
+    .step-line.done { background: var(--success); }
+
+    .content {
+      flex: 1;
+      padding: 0 40px 20px;
+      overflow-y: auto;
+    }
+    .step-page {
+      display: none;
+      animation: fadeIn 0.3s ease;
+    }
+    .step-page.active { display: block; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      font-size: 16px;
+      color: var(--primary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: block;
+      margin-bottom: 6px;
+    }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-input);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus {
+      border-color: var(--primary);
+    }
+    input:read-only {
+      cursor: default;
+      opacity: 0.8;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      margin-bottom: 16px;
+    }
+    .input-row .field { flex: 1; }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #555;
+    }
+    .btn-danger {
+      background: var(--error);
+      color: white;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: #e04545;
+    }
+    .btn-small {
+      padding: 8px 16px;
+      font-size: 13px;
+    }
+
+    .footer {
+      padding: 16px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+
+    .disk-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .disk-table th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+      border-bottom: 1px solid var(--border);
+    }
+    .disk-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .disk-table tr.selectable {
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .disk-table tr.selectable:hover {
+      background: var(--primary-light);
+    }
+    .disk-table tr.selected {
+      background: var(--primary-light);
+      border-left: 3px solid var(--primary);
+    }
+    .disk-table tr.selected td:first-child {
+      padding-left: 9px;
+    }
+
+    .progress-container {
+      margin: 20px 0;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 24px;
+      background: var(--bg-input);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary) 0%, #ffab40 100%);
+      border-radius: 12px;
+      transition: width 0.5s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: white;
+      min-width: 40px;
+    }
+
+    .log-area {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      max-height: 180px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .log-entry {
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .log-entry.info { color: var(--text-muted); }
+    .log-entry.success { color: var(--success); }
+    .log-entry.error { color: var(--error); }
+    .log-entry.warn { color: var(--warning); }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-success { background: rgba(0,200,83,0.15); color: var(--success); }
+    .badge-error { background: rgba(255,82,82,0.15); color: var(--error); }
+    .badge-warn { background: rgba(255,193,7,0.15); color: var(--warning); }
+    .badge-info { background: rgba(255,140,0,0.15); color: var(--primary); }
+
+    .result-icon {
+      font-size: 64px;
+      text-align: center;
+      margin: 20px 0;
+    }
+    .result-text {
+      text-align: center;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .result-sub {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--border);
+      outline: none;
+      margin: 10px 0;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: var(--primary);
+      cursor: pointer;
+      border: 2px solid white;
+    }
+
+    .size-display {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .warning-box {
+      background: rgba(255,193,7,0.1);
+      border: 1px solid var(--warning);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--warning);
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .warning-box .icon { font-size: 18px; flex-shrink: 0; }
+  </style>
+</head>
+
+<body>
+
+  <div class="header">
+    <div>
+      <h1>Next OS Installer</h1>
+      <div class="subtitle">Pardus Linux Gec Asistani v0.1.0</div>
+    </div>
+    <div style="margin-left:auto;">
+      <span class="badge badge-info" id="adminBadge">Kontrol ediliyor...</span>
+    </div>
+  </div>
+
+  <div class="stepper">
+    <div class="step-item">
+      <div class="step-circle active" id="stepCircle1">1</div>
+      <div class="step-label active" id="stepLabel1">ISO Secimi</div>
+    </div>
+    <div class="step-line" id="stepLine1"></div>
+    <div class="step-item">
+      <div class="step-circle" id="stepCircle2">2</div>
+      <div class="step-label" id="stepLabel2">Disk Ayari</div>
+    </div>
+    <div class="step-line" id="stepLine2"></div>
+    <div class="step-item">
+      <div class="step-circle" id="stepCircle3">3</div>
+      <div class="step-label" id="stepLabel3">Kurulum</div>
+    </div>
+    <div class="step-line" id="stepLine3"></div>
+    <div class="step-item">
+      <div class="step-circle" id="stepCircle4">4</div>
+      <div class="step-label" id="stepLabel4">Tamamlandi</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <div class="step-page active" id="page1">
+      <div class="card">
+        <h2>ISO Dosyasi Secimi</h2>
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+          Kurmak istediginiz Debian tabanli Linux dagitiminin ISO dosyasini secin.
+          (Pardus, Debian, Ubuntu vb.)
+        </p>
+        <div class="input-row">
+          <div class="field">
+            <label>ISO Dosya Yolu:</label>
+            <input type="text" id="isoPath" placeholder="Henuz secilmedi..." readonly />
+          </div>
+          <button class="btn btn-secondary btn-small" id="btnSelectIso" style="margin-bottom:0;">
+            SEC
+          </button>
+        </div>
+        <div id="isoStatus" style="font-size:12px; color:var(--text-muted);">
+          Lutfen bir ISO dosyasi secin.
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Sistem Bilgisi</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:13px;">
+          <div>
+            <label>Boot Modu:</label>
+            <span id="bootModeInfo" style="color:var(--text);">Kontrol ediliyor...</span>
+          </div>
+          <div>
+            <label>Yonetici Yetkisi:</label>
+            <span id="adminInfo" style="color:var(--text);">Kontrol ediliyor...</span>
+          </div>
+        </div>
+        <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px;">
+          <button class="btn btn-secondary btn-small" id="btnCleanOldEntries" onclick="cleanOldBootEntries()">
+            &#128465; Eski Boot Kayitlarini Temizle
+          </button>
+          <span id="cleanupStatus" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="step-page" id="page2">
+      <div class="card">
+        <h2>Disk Bolumu Secimi</h2>
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+          Linux kurulum dosyalarinin yerlestirilecegi diski ve bolumu secin.
+          Secilen bolum kucultulerek yeni bir alan olusturulacaktir.
+        </p>
+        <div id="diskLoading" style="text-align:center; padding:30px; color:var(--text-muted);">
+          Disk bilgileri yukleniyor...
+        </div>
+        <div id="diskTableContainer" style="display:none;">
+          <table class="disk-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Surucu</th>
+                <th>Etiket</th>
+                <th>Dosya Sistemi</th>
+                <th>Boyut</th>
+                <th>Bos Alan</th>
+              </tr>
+            </thead>
+            <tbody id="diskTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" id="shrinkConfig" style="display:none;">
+        <h2>Kucultme Yapilandirmasi</h2>
+        <div>
+          <label>
+            Yeni bolum icin ayrilacak alan:
+            <strong id="shrinkValueDisplay" style="color:var(--primary);">8 GB</strong>
+          </label>
+          <input type="range" id="shrinkSlider" min="5" max="100" value="8" step="1" />
+          <div class="size-display">
+            <span>Min: <span id="shrinkMin">5</span> GB</span>
+            <span>Max: <span id="shrinkMax">100</span> GB</span>
+          </div>
+        </div>
+        <div class="warning-box">
+          <span class="icon">&#9888;</span>
+          <div>
+            <strong>Dikkat:</strong> Bu islem geri alinamaz! Secilen bolumden
+            belirtilen kadar alan kucultulecek ve yeni bir NTFS bolumu olusturulacaktir.
+            Islem oncesi verilerinizi yedeklemeniz onemle tavsiye edilir.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step-page" id="page3">
+      <div class="card">
+        <h2>Kurulum Ilerlemesi</h2>
+        <div class="progress-container">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progressBar" style="width: 0%;">0%</div>
+          </div>
+        </div>
+        <p id="progressStep" style="font-size:14px; font-weight:600; margin-bottom:4px;">
+          Hazirlaniyor...
+        </p>
+        <p id="progressMessage" style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+          Islem baslatiliyor...
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Islem Gunlugu</h2>
+        <div class="log-area" id="logArea">
+          <div class="log-entry info">Kurulum baslatildi...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step-page" id="page4">
+      <div class="card" style="text-align:center;">
+        <div class="result-icon" id="resultIcon">&#10003;</div>
+        <div class="result-text" id="resultTitle">Kurulum Hazirligi Tamamlandi!</div>
+        <div class="result-sub" id="resultMessage">
+          Sistem yeniden baslatildiginda Linux kurulumu otomatik olarak baslayacaktir.
+        </div>
+        <div style="margin-top:24px; display:flex; gap:12px; justify-content:center;">
+          <button class="btn btn-primary" id="btnReboot" onclick="doReboot()">
+            Yeniden Baslat (5 sn)
+          </button>
+        </div>
+        <p style="font-size:11px; color:var(--text-muted); margin-top:12px;">
+          Yeniden baslatma sonrasi Windows Boot Manager uzerinden
+          "Next OS Installer" secenegi ile Linux baslatilacaktir.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <button class="btn btn-secondary" id="btnBack" onclick="prevStep()" style="visibility:hidden;">
+      &#8592; Geri
+    </button>
+    <div id="footerStatus" style="font-size:12px; color:var(--text-muted);"></div>
+    <button class="btn btn-primary" id="btnNext" onclick="nextStep()" disabled>
+      Ileri &#8594;
+    </button>
+  </div>
+
+  <script>
+
+    const { invoke } = window.__TAURI__.core;
+    const { open } = window.__TAURI__.dialog;
+    const { listen } = window.__TAURI__.event;
+
+    const state = {
+      currentStep: 1,
+      totalSteps: 4,
+      isoPath: '',
+      isAdmin: false,
+      bootMode: 'Bilinmiyor',
+      disks: [],
+      selectedDisk: null,
+      maxShrinkMB: 0,
+      shrinkSizeMB: 8192,
+      newPartitionLetter: '',
+      kernelInfo: null,
+      bcdGuid: '',
+      espLetter: '',
+      installationRunning: false,
+    };
+
+    document.addEventListener('DOMContentLoaded', async () => {
+
+      checkSystemInfo();
+
+      document.getElementById('btnSelectIso').addEventListener('click', selectIso);
+
+      document.getElementById('shrinkSlider').addEventListener('input', (e) => {
+        state.shrinkSizeMB = parseInt(e.target.value) * 1024;
+        document.getElementById('shrinkValueDisplay').textContent = e.target.value + ' GB';
+      });
+
+      await listen('installation-progress', (event) => {
+        const { step, progress, message } = event.payload;
+        updateProgress(progress, stepToTurkish(step), message);
+      });
+    });
+
+    async function checkSystemInfo() {
+
+      try {
+        state.isAdmin = await invoke('check_admin');
+        document.getElementById('adminInfo').textContent = state.isAdmin ? 'Evet' : 'Hayir';
+        document.getElementById('adminInfo').style.color = state.isAdmin ? 'var(--success)' : 'var(--error)';
+        document.getElementById('adminBadge').textContent = state.isAdmin ? 'Yonetici' : 'Yetkisiz';
+        document.getElementById('adminBadge').className = state.isAdmin ? 'badge badge-success' : 'badge badge-error';
+      } catch (e) {
+        document.getElementById('adminInfo').textContent = 'Kontrol edilemedi';
+        document.getElementById('adminBadge').textContent = 'Hata';
+        document.getElementById('adminBadge').className = 'badge badge-error';
+      }
+
+      try {
+        state.bootMode = await invoke('detect_boot_mode');
+        document.getElementById('bootModeInfo').textContent = state.bootMode;
+        document.getElementById('bootModeInfo').style.color =
+          state.bootMode === 'UEFI' ? 'var(--success)' : 'var(--warning)';
+      } catch (e) {
+        document.getElementById('bootModeInfo').textContent = 'Tespit edilemedi';
+      }
+    }
+
+    async function selectIso() {
+      try {
+        const selected = await open({
+          multiple: false,
+          filters: [{ name: 'Linux ISO', extensions: ['iso'] }]
+        });
+
+        if (selected) {
+          state.isoPath = selected;
+          document.getElementById('isoPath').value = state.isoPath;
+          document.getElementById('isoStatus').innerHTML =
+            '<span style="color:var(--success);">&#10003; ISO secildi: ' + getFileName(state.isoPath) + '</span>';
+          validateStep();
+        }
+      } catch (err) {
+        document.getElementById('isoStatus').innerHTML =
+          '<span style="color:var(--error);">Hata: ' + err + '</span>';
+      }
+    }
+
+    async function loadDiskInfo() {
+      document.getElementById('diskLoading').style.display = 'block';
+      document.getElementById('diskTableContainer').style.display = 'none';
+
+      try {
+        state.disks = await invoke('get_disk_info');
+        renderDiskTable();
+      } catch (e) {
+        document.getElementById('diskLoading').innerHTML =
+          '<span style="color:var(--error);">Disk bilgisi alinamadi: ' + e + '</span>';
+      }
+    }
+
+    function renderDiskTable() {
+      const tbody = document.getElementById('diskTableBody');
+      tbody.innerHTML = '';
+
+      if (state.disks.length === 0) {
+        document.getElementById('diskLoading').innerHTML =
+          '<span style="color:var(--error);">Hicbir disk bulunamadi.</span>';
+        return;
+      }
+
+      state.disks.forEach((disk) => {
+
+        const diskRow = document.createElement('tr');
+        diskRow.innerHTML = `
+          <td colspan="6" style="font-weight:600; color:var(--primary); padding-top:14px;">
+            Disk ${disk.disk_number} (${disk.total_size_gb} GB)
+          </td>`;
+        tbody.appendChild(diskRow);
+
+        disk.partitions.forEach((part) => {
+          if (!part.drive_letter || part.file_system === 'Bilinmiyor') return;
+          if (part.size_gb < 20) return;
+
+          const tr = document.createElement('tr');
+          tr.className = 'selectable';
+          tr.dataset.disk = disk.disk_number;
+          tr.dataset.partition = part.partition_number;
+          tr.dataset.letter = part.drive_letter;
+          tr.dataset.freeGb = part.free_space_gb;
+
+          tr.innerHTML = `
+            <td><input type="radio" name="partSelect" /></td>
+            <td style="font-weight:600;">${part.drive_letter}:</td>
+            <td>${part.label || '-'}</td>
+            <td>${part.file_system}</td>
+            <td>${part.size_gb} GB</td>
+            <td>${part.free_space_gb} GB</td>`;
+
+          tr.addEventListener('click', () => selectPartition(tr, disk.disk_number, part));
+          tbody.appendChild(tr);
+        });
+      });
+
+      document.getElementById('diskLoading').style.display = 'none';
+      document.getElementById('diskTableContainer').style.display = 'block';
+    }
+
+    async function selectPartition(row, diskNumber, part) {
+
+      document.querySelectorAll('.disk-table tr.selected').forEach(r => r.classList.remove('selected'));
+      document.querySelectorAll('.disk-table input[type=radio]').forEach(r => r.checked = false);
+
+      row.classList.add('selected');
+      row.querySelector('input[type=radio]').checked = true;
+
+      state.selectedDisk = {
+        diskNumber: diskNumber,
+        partitionNumber: part.partition_number,
+        driveLetter: part.drive_letter,
+      };
+
+      try {
+        state.maxShrinkMB = await invoke('get_max_shrink_size', { driveLetter: part.drive_letter });
+        const maxGB = Math.floor(state.maxShrinkMB / 1024);
+        const minGB = 5;
+        const defaultGB = Math.min(8, maxGB);
+
+        const slider = document.getElementById('shrinkSlider');
+        slider.min = minGB;
+        slider.max = maxGB;
+        slider.value = defaultGB;
+        document.getElementById('shrinkMin').textContent = minGB;
+        document.getElementById('shrinkMax').textContent = maxGB;
+        document.getElementById('shrinkValueDisplay').textContent = defaultGB + ' GB';
+        state.shrinkSizeMB = defaultGB * 1024;
+
+        document.getElementById('shrinkConfig').style.display = 'block';
+      } catch (e) {
+        document.getElementById('shrinkConfig').style.display = 'block';
+        document.getElementById('shrinkConfig').innerHTML = `
+          <h2>Kucultme Bilgisi</h2>
+          <div style="color:var(--error);">Kucultme boyutu alinamadi: ${e}</div>`;
+      }
+
+      validateStep();
+    }
+
+    function updateStepper() {
+      for (let i = 1; i <= state.totalSteps; i++) {
+        const circle = document.getElementById('stepCircle' + i);
+        const label = document.getElementById('stepLabel' + i);
+
+        circle.className = 'step-circle';
+        label.className = 'step-label';
+
+        if (i < state.currentStep) {
+          circle.className = 'step-circle done';
+          circle.innerHTML = '&#10003;';
+          label.className = 'step-label done';
+        } else if (i === state.currentStep) {
+          circle.className = 'step-circle active';
+          circle.textContent = i;
+          label.className = 'step-label active';
+        } else {
+          circle.textContent = i;
+        }
+
+        if (i < state.totalSteps) {
+          const line = document.getElementById('stepLine' + i);
+          line.className = i < state.currentStep ? 'step-line done' : 'step-line';
+        }
+      }
+
+      for (let i = 1; i <= state.totalSteps; i++) {
+        document.getElementById('page' + i).classList.toggle('active', i === state.currentStep);
+      }
+
+      document.getElementById('btnBack').style.visibility =
+        state.currentStep > 1 && state.currentStep < 3 ? 'visible' : 'hidden';
+
+      if (state.currentStep === 3) {
+        document.getElementById('btnNext').style.display = 'none';
+        document.getElementById('btnBack').style.visibility = 'hidden';
+      } else if (state.currentStep === 4) {
+        document.getElementById('btnNext').style.display = 'none';
+        document.getElementById('btnBack').style.visibility = 'hidden';
+      } else {
+        document.getElementById('btnNext').style.display = 'inline-flex';
+      }
+
+      if (state.currentStep === 2 && state.disks.length === 0) {
+        loadDiskInfo();
+      }
+
+      validateStep();
+    }
+
+    function validateStep() {
+      const btnNext = document.getElementById('btnNext');
+
+      switch (state.currentStep) {
+        case 1:
+          btnNext.disabled = !state.isoPath;
+          btnNext.textContent = 'Ileri \u2192';
+          break;
+        case 2:
+          btnNext.disabled = !state.selectedDisk;
+          btnNext.textContent = 'Kurulumu Baslat \u26A1';
+          break;
+        default:
+          btnNext.disabled = true;
+      }
+    }
+
+    function nextStep() {
+      if (state.currentStep === 2) {
+
+        if (!state.isAdmin) {
+          alert('HATA: Disk islemleri icin uygulamayi Yonetici (Administrator) olarak calistirmaniz gerekiyor!');
+          return;
+        }
+        state.currentStep = 3;
+        updateStepper();
+        startInstallation();
+        return;
+      }
+
+      if (state.currentStep < state.totalSteps) {
+        state.currentStep++;
+        updateStepper();
+      }
+    }
+
+    function prevStep() {
+      if (state.currentStep > 1) {
+        state.currentStep--;
+        updateStepper();
+      }
+    }
+
+    async function startInstallation() {
+      state.installationRunning = true;
+      addLog('info', 'Kurulum sureci baslatildi...');
+
+      try {
+
+        addLog('info', `Disk ${state.selectedDisk.diskNumber}, Bolum ${state.selectedDisk.partitionNumber} kucultme basliyor...`);
+        updateProgress(5, 'Disk Hazirlama', 'Bolum kucultme islemi baslatiliyor...');
+
+        const partResult = await invoke('prepare_disk', {
+          diskNumber: state.selectedDisk.diskNumber,
+          partitionNumber: state.selectedDisk.partitionNumber,
+          shrinkSizeMb: state.shrinkSizeMB,
+        });
+
+        state.newPartitionLetter = partResult.drive_letter;
+        addLog('success', `Yeni bolum olusturuldu: ${partResult.drive_letter}:\\ (${partResult.size_mb} MB)`);
+        updateProgress(30, 'Disk Hazirlama', 'Disk basariyla hazirlandi!');
+
+        addLog('info', `ISO cikartma basliyor: ${getFileName(state.isoPath)} -> ${state.newPartitionLetter}:\\`);
+        updateProgress(35, 'ISO Cikartma', 'ISO dosyasi monte ediliyor...');
+
+        const kernelInfo = await invoke('extract_iso', {
+          isoPath: state.isoPath,
+          targetDriveLetter: state.newPartitionLetter,
+        });
+
+        state.kernelInfo = kernelInfo;
+        addLog('success', `ISO cikartildi! Kernel: ${kernelInfo.kernel_path}, Initrd: ${kernelInfo.initrd_path}`);
+        updateProgress(70, 'ISO Cikartma', 'ISO basariyla cikartildi!');
+
+        addLog('info', 'Bootloader yapilandirmasi basliyor (bcdedit)...');
+        updateProgress(75, 'Bootloader', 'Windows Boot Manager yapilandiriliyor...');
+
+        const bootResult = await invoke('configure_bootloader', {
+          isoPartitionLetter: state.newPartitionLetter,
+          kernelPath: kernelInfo.kernel_path,
+          initrdPath: kernelInfo.initrd_path,
+        });
+
+        state.bcdGuid = bootResult.bcd_entry_guid;
+        state.espLetter = bootResult.esp_path || '';
+        addLog('success', `Bootloader yapilandirildi! BCD GUID: ${bootResult.bcd_entry_guid}`);
+        updateProgress(100, 'Tamamlandi', 'Tum islemler basariyla tamamlandi!');
+
+        setTimeout(() => {
+          state.currentStep = 4;
+          updateStepper();
+          document.getElementById('resultIcon').innerHTML = '&#10003;';
+          document.getElementById('resultIcon').style.color = 'var(--success)';
+          document.getElementById('resultTitle').textContent = 'Kurulum Hazirligi Tamamlandi!';
+          document.getElementById('resultMessage').textContent =
+            'Sistem yeniden baslatildiginda Linux kurulumu otomatik olarak baslayacaktir.';
+        }, 1000);
+
+      } catch (error) {
+        addLog('error', `HATA: ${error}`);
+        updateProgress(-1, 'Hata', 'Kurulum basarisiz oldu: ' + error);
+        state.installationRunning = false;
+
+        if (state.bcdGuid) {
+          addLog('warn', 'BCD girisi temizleniyor...');
+          try {
+            await invoke('cleanup_boot_entry', {
+              bcdGuid: state.bcdGuid,
+              espLetter: state.espLetter,
+            });
+            addLog('info', 'Temizleme tamamlandi.');
+          } catch (cleanupErr) {
+            addLog('error', 'Temizleme hatasi: ' + cleanupErr);
+          }
+        }
+
+        setTimeout(() => {
+          state.currentStep = 4;
+          updateStepper();
+          document.getElementById('resultIcon').innerHTML = '&#10007;';
+          document.getElementById('resultIcon').style.color = 'var(--error)';
+          document.getElementById('resultTitle').textContent = 'Kurulum Basarisiz!';
+          document.getElementById('resultMessage').textContent = 'Hata: ' + error;
+          document.getElementById('btnReboot').style.display = 'none';
+        }, 1500);
+      }
+    }
+
+    async function cleanOldBootEntries() {
+      const btn = document.getElementById('btnCleanOldEntries');
+      const status = document.getElementById('cleanupStatus');
+      btn.disabled = true;
+      status.textContent = 'Taranıyor...';
+      status.style.color = 'var(--text-muted)';
+
+      try {
+        const deleted = await invoke('cleanup_old_boot_entries');
+        if (deleted.length === 0) {
+          status.innerHTML = '<span style="color:var(--success);">&#10003; Eski kayit bulunamadi.</span>';
+        } else {
+          status.innerHTML = '<span style="color:var(--success);">&#10003; ' + deleted.length + ' eski kayit silindi.</span>';
+        }
+      } catch (e) {
+        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
+      }
+      btn.disabled = false;
+    }
+
+    async function doReboot() {
+      try {
+        await invoke('reboot_system');
+        document.getElementById('resultMessage').textContent =
+          'Sistem 5 saniye icinde yeniden baslatilacak...';
+        document.getElementById('btnReboot').disabled = true;
+      } catch (e) {
+        alert('Yeniden baslatma hatasi: ' + e);
+      }
+    }
+
+    function updateProgress(percent, stepName, message) {
+      const bar = document.getElementById('progressBar');
+      const stepEl = document.getElementById('progressStep');
+      const msgEl = document.getElementById('progressMessage');
+
+      if (percent >= 0) {
+        bar.style.width = percent + '%';
+        bar.textContent = percent + '%';
+      }
+      if (percent < 0) {
+        bar.style.width = '100%';
+        bar.style.background = 'var(--error)';
+        bar.textContent = 'HATA';
+      }
+      stepEl.textContent = stepName;
+      msgEl.textContent = message;
+    }
+
+    function addLog(type, message) {
+      const logArea = document.getElementById('logArea');
+      const time = new Date().toLocaleTimeString('tr-TR');
+      const prefix = { info: 'BILGI', success: 'BASARI', error: 'HATA', warn: 'UYARI' };
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.textContent = `[${time}] [${prefix[type] || 'BILGI'}] ${message}`;
+      logArea.appendChild(entry);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function stepToTurkish(step) {
+      const map = {
+        'disk_prepare': 'Disk Hazirlama',
+        'disk_shrink': 'Disk Kucultme',
+        'partition_create': 'Bolum Olusturma',
+        'iso_extract': 'ISO Cikartma',
+        'bootloader': 'Bootloader',
+      };
+      return map[step] || step;
+    }
+
+    function getFileName(path) {
+      return path.split('\\').pop().split('/').pop();
+    }
+
+    updateStepper();
+  </script>
+</body>
+</html>
