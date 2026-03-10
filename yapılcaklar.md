@@ -1,1 +1,0 @@
-uygulama başlatıldığında yönetici isteği istesin direkt 

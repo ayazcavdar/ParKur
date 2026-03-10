@@ -179,8 +179,18 @@ async fn extract_iso(
 
     let _ = iso_ops::unmount_iso(&iso_path);
 
-    // Kopyalama hatasını şimdi kontrol et
     copy_result?;
+
+    let _ = app.emit(
+        "installation-progress",
+        ProgressPayload {
+            step: "iso_extract".into(),
+            progress: 87,
+            message: "ISO dosyası hedefe kopyalanıyor...".into(),
+        },
+    );
+
+    iso_ops::copy_iso_file(&iso_path, &target_drive_letter)?;
 
     // ── Adım 3: Linux çekirdek dosyalarını bul ──
     let _ = app.emit(

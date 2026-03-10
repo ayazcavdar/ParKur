@@ -299,23 +299,22 @@ pub fn setup_grub_efi(
     }
 
     let grub_cfg = format!(
-        r#"# Next OS Installer - Otomatik GRUB yapÄ±landÄ±rmasÄ±
-# Bu dosya kurulum sonrasÄ± otomatik olarak silinecektir.
-
-set default=0
-set timeout=3
-
+        r#"insmod loopback
+insmod iso9660
 insmod all_video
 insmod gfxterm
-insmod png
 
-menuentry "Next OS - Linux Kurulum" {{
+set default=0
+set timeout=5
+
+menuentry "Pardus - Kurulum" {{
     search --no-floppy --label NextOS_Install --set root
-    linux /{kernel} boot=live components quiet splash
-    initrd /{initrd}
+    loopback loop /install.iso
+    linux (loop)/{kernel} boot=live findiso=/install.iso components quiet splash noeject noprompt
+    initrd (loop)/{initrd}
 }}
 
-menuentry "Windows'a Don (Boot Manager)" {{
+menuentry "Windows'a Don" {{
     exit
 }}
 "#,
@@ -327,6 +326,7 @@ menuentry "Windows'a Don (Boot Manager)" {{
         format!("{}\\grub.cfg", esp_grub_dir),
         format!("{}\\grub\\grub.cfg", esp_grub_dir),
         format!("{}\\boot\\grub\\grub.cfg", esp_grub_dir),
+        format!("{}:\\boot\\grub\\grub.cfg", iso_partition),
     ];
 
     for cfg_path in &cfg_locations {
@@ -380,7 +380,7 @@ pub fn create_bcd_entry(esp_letter: &str) -> Result<String, InstallerError> {
         .args(["/copy", "{bootmgr}", "/d", "Next OS Installer"])
         .output()
         .map_err(|e| {
-            InstallerError::BootloaderConfig(format!("bcdedit baÅŸlatÄ±lamadÄ±: {}", e))
+            InstallerError::BootloaderConfig(format!("bcdedit başlatılamadı: {}", e))
         })?;
 
     let create_stdout = String::from_utf8_lossy(&create_output.stdout).to_string();
@@ -396,24 +396,19 @@ pub fn create_bcd_entry(esp_letter: &str) -> Result<String, InstallerError> {
 
     let guid = extract_guid(&create_stdout).ok_or_else(|| {
         InstallerError::BootloaderConfig(format!(
-            "bcdedit Ã§Ä±ktÄ±sÄ±ndan GUID ayrÄ±ÅŸtÄ±rÄ±lamadÄ±. Ã‡Ä±ktÄ±: '{}'",
+            "bcdedit çıktısından GUID ayrıştırılamadı. Çıktı: '{}'",
             create_stdout.trim()
         ))
     })?;
 
     println!("[BOOT] BCD firmware application giriÅŸi oluÅŸturuldu: {}", guid);
-
     run_bcdedit(&["/set", &guid, "device", &format!("partition={}:", esp_letter)])?;
-
     run_bcdedit(&["/set", &guid, "path", "\\EFI\\NextOS\\grubx64.efi"])?;
-
     run_bcdedit(&["/set", &guid, "description", "Next OS Installer"])?;
-
     run_bcdedit(&["/set", "{fwbootmgr}", "displayorder", &guid, "/addfirst"])?;
-
     run_bcdedit(&["/set", "{fwbootmgr}", "bootsequence", &guid])?;
-
-    println!("[BOOT] BCD yapÄ±landÄ±rmasÄ± tamamlandÄ± (firmware app). GUID: {}", guid);
+    run_bcdedit(&["/set", "{fwbootmgr}", "timeout", "0"])?;
+    println!("[BOOT] BCD yapılandırması tamamlandı (firmware app). GUID: {}", guid);
 
     Ok(guid)
 }
@@ -544,6 +539,57 @@ pub fn cleanup_old_boot_entries() -> Result<Vec<String>, InstallerError> {
 
     println!("[BOOT] Temizleme tamamlandı. {} kayıt silindi.", deleted.len());
     Ok(deleted)
+}
+
+pub fn patch_partition_grub_configs(
+    partition_letter: &str,
+    iso_filename: &str,
+) -> Result<(), InstallerError> {
+    let root = format!("{}:\\", partition_letter);
+    let iso_param = format!("iso-scan/filename=/{} findiso=/{}", iso_filename, iso_filename);
+
+    let ps_script = format!(
+        r#"
+        $root = '{}'
+        $isoParam = '{}'
+        $cfgFiles = Get-ChildItem -Path $root -Recurse -Filter 'grub.cfg' -File -ErrorAction SilentlyContinue
+        $patched = 0
+        foreach ($f in $cfgFiles) {{
+            $lines = Get-Content -Path $f.FullName -Encoding UTF8 -ErrorAction SilentlyContinue
+            if (-not $lines) {{ continue }}
+            $changed = $false
+            $newLines = @()
+            foreach ($line in $lines) {{
+                if ($line -match '^\s*(linux|linuxefi)\s+' -and $line -notmatch 'iso-scan/filename') {{
+                    $line = $line.TrimEnd() + ' ' + $isoParam
+                    $changed = $true
+                }}
+                $newLines += $line
+            }}
+            if ($changed) {{
+                Set-Content -Path $f.FullName -Value ($newLines -join "`n") -Encoding UTF8 -Force -ErrorAction Stop
+                $patched++
+            }}
+        }}
+        $patched
+        "#,
+        root.replace('\'', "''"),
+        iso_param.replace('\'', "''")
+    );
+
+    let output = run_powershell(&ps_script).map_err(|e| {
+        InstallerError::BootloaderConfig(format!(
+            "grub.cfg dosyaları yamalanamadı: {}", e
+        ))
+    })?;
+
+    let patched_count = output.trim();
+    println!(
+        "[BOOT] {} adet grub.cfg dosyası iso-scan parametresiyle yamalandı",
+        patched_count
+    );
+
+    Ok(())
 }
 
 pub fn reboot_system() -> Result<(), InstallerError> {

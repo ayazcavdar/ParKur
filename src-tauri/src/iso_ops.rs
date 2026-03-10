@@ -126,19 +126,19 @@ pub fn copy_iso_contents(
         .args([
             &source,
             &dest,
-            "/E",        // Alt dizinler dahil
-            "/R:3",      // 3 tekrar denemesi
-            "/W:1",      // 1 saniye bekleme
-            "/NFL",      // Dosya listesi gizle
-            "/NDL",      // Dizin listesi gizle
-            "/NJH",      // Ä°ÅŸ baÅŸlÄ±ÄŸÄ± gizle
-            "/NJS",      // Ä°ÅŸ Ã¶zeti gizle
-            "/MT:4",     // 4 thread ile paralel kopyalama
+            "/E",
+            "/R:3",
+            "/W:1",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+            "/MT:4",
         ])
         .output()
         .map_err(|e| {
             InstallerError::IsoExtraction(format!(
-                "robocopy baÅŸlatÄ±lamadÄ±: {}. Windows robocopy yÃ¼klÃ¼ mÃ¼?",
+                "robocopy başlatılamadı: {}. Windows robocopy yüklü mü?",
                 e
             ))
         })?;
@@ -149,7 +149,7 @@ pub fn copy_iso_contents(
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(InstallerError::IsoExtraction(format!(
-            "robocopy dosya kopyalama hatasÄ± (Ã§Ä±kÄ±ÅŸ kodu: {}):\nÃ‡Ä±ktÄ±: {}\nHata: {}",
+            "robocopy dosya kopyalama hatası (çıkış kodu: {}):\nÇıktı: {}\nHata: {}",
             exit_code,
             stdout.chars().take(500).collect::<String>(),
             stderr.chars().take(500).collect::<String>()
@@ -157,7 +157,7 @@ pub fn copy_iso_contents(
     }
 
     println!(
-        "[ISO] Dosya kopyalama tamamlandÄ± (robocopy Ã§Ä±kÄ±ÅŸ kodu: {})",
+        "[ISO] Dosya kopyalama tamamlandı (robocopy çıkış kodu: {})",
         exit_code
     );
     Ok(())
@@ -183,24 +183,45 @@ pub fn find_linux_kernel(partition_root: &str) -> Result<LinuxKernelInfo, Instal
 
         if kernel_path.exists() {
             println!(
-                "[ISO] vmlinuz bulundu ({}), ancak eÅŸleÅŸen initrd ({}) bulunamadÄ±.",
+                "[ISO] vmlinuz bulundu ({}), ancak eşleşen initrd ({}) bulunamadı.",
                 kernel_rel, initrd_rel
             );
         }
     }
 
-    println!("[ISO] Bilinen yollarda Ã§ekirdek bulunamadÄ±, recursive arama yapÄ±lÄ±yor...");
+    println!("[ISO] Bilinen yollarda çekirdek bulunamadı, recursive arama yapılıyor...");
     let found = find_kernel_recursive(root)?;
 
     match found {
         Some(info) => Ok(info),
         None => Err(InstallerError::IsoExtraction(format!(
-            "Linux Ã§ekirdek dosyalarÄ± (vmlinuz/initrd) ISO iÃ§eriÄŸinde bulunamadÄ±. \
-             LÃ¼tfen geÃ§erli bir Debian tabanlÄ± Linux ISO dosyasÄ± seÃ§tiÄŸinizden emin olun. \
+            "Linux çekirdek dosyaları (vmlinuz/initrd) ISO içeriğinde bulunamadı. \
+             Lütfen geçerli bir Debian tabanlı Linux ISO dosyası seçtiğinizden emin olun. \
              Aranan dizin: {}",
             partition_root
         ))),
     }
+}
+
+pub fn copy_iso_file(iso_path: &str, target_drive_letter: &str) -> Result<String, InstallerError> {
+    let iso_filename = "install.iso";
+    let dest_path = format!("{}:\\{}", target_drive_letter, iso_filename);
+
+    let ps_script = format!(
+        r#"Copy-Item -Path '{}' -Destination '{}' -Force -ErrorAction Stop"#,
+        iso_path.replace('\'', "''"),
+        dest_path.replace('\'', "''")
+    );
+
+    run_powershell(&ps_script).map_err(|e| {
+        InstallerError::IsoExtraction(format!(
+            "ISO dosyası hedefe kopyalanamadı ({} -> {}): {}",
+            iso_path, dest_path, e
+        ))
+    })?;
+
+    println!("[ISO] ISO dosyası kopyalandı: {} -> {}", iso_path, dest_path);
+    Ok(iso_filename.to_string())
 }
 
 fn find_kernel_recursive(dir: &std::path::Path) -> Result<Option<LinuxKernelInfo>, InstallerError> {
@@ -215,7 +236,7 @@ fn find_kernel_recursive(dir: &std::path::Path) -> Result<Option<LinuxKernelInfo
         depth: u32,
     ) {
         if depth > 5 {
-            return; // Ã‡ok derin aramayÄ± engelle
+            return;
         }
 
         if let Ok(entries) = std::fs::read_dir(dir) {
