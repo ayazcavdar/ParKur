@@ -1,9 +1,12 @@
-﻿
+
 use crate::disk_ops::run_powershell;
 use crate::error::InstallerError;
 use crate::iso_ops::LinuxKernelInfo;
 use serde::{Deserialize, Serialize};
+use std::os::windows::process::CommandExt;
 use std::process::Command;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum BootMode {
@@ -193,6 +196,183 @@ fn copy_and_validate_efi(source: &str, dest: &str) -> Result<(), InstallerError>
     Ok(())
 }
 
+// ─── CPIO / Preseed Desteği ─────────────────────────────────────────────────
+// Debian installer (d-i), kurulum medyasını USB/CD-ROM'da arar.
+// Biz ISO'yu hard disk bölümünde tuttuğumuz için d-i bunu bulamaz.
+// Çözüm: preseed.cpio içinde bir script ile ISO'yu erken aşamada
+// loop-mount edip /cdrom'a bağlıyoruz.
+
+/// CPIO "newc" formatında arşiv oluşturur.
+/// files: (dosya_adı, veri, mod) listesi
+fn create_cpio_newc_archive(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut ino: u32 = 1;
+
+    for &(filename, data, mode) in files {
+        let namesize = filename.len() + 1;
+        let header = format!(
+            "070701\
+             {:08X}{:08X}{:08X}{:08X}\
+             {:08X}{:08X}{:08X}{:08X}\
+             {:08X}{:08X}{:08X}{:08X}\
+             {:08X}",
+            ino,
+            mode,
+            0u32, 0u32,
+            1u32,
+            0u32,
+            data.len() as u32,
+            0u32, 0u32,
+            0u32, 0u32,
+            namesize as u32,
+            0u32,
+        );
+        buf.extend_from_slice(header.as_bytes());
+        buf.extend_from_slice(filename.as_bytes());
+        buf.push(0);
+        while buf.len() % 4 != 0 { buf.push(0); }
+        buf.extend_from_slice(data);
+        while buf.len() % 4 != 0 { buf.push(0); }
+        ino += 1;
+    }
+
+    // Trailer
+    let trailer_name = "TRAILER!!!";
+    let namesize = trailer_name.len() + 1;
+    let trailer = format!(
+        "070701\
+         {:08X}{:08X}{:08X}{:08X}\
+         {:08X}{:08X}{:08X}{:08X}\
+         {:08X}{:08X}{:08X}{:08X}\
+         {:08X}",
+        0u32, 0u32, 0u32, 0u32,
+        1u32, 0u32, 0u32, 0u32,
+        0u32, 0u32, 0u32,
+        namesize as u32,
+        0u32,
+    );
+    buf.extend_from_slice(trailer.as_bytes());
+    buf.extend_from_slice(trailer_name.as_bytes());
+    buf.push(0);
+    while buf.len() % 4 != 0 { buf.push(0); }
+    while buf.len() % 512 != 0 { buf.push(0); }
+
+    buf
+}
+
+/// Debian installer için preseed CPIO arşivi oluşturur ve bölüme yazar.
+/// Bu dosya GRUB tarafından ek initrd olarak yüklenir ve d-i'ye
+/// ISO'yu nereden bulacağını söyler.
+pub fn create_preseed_cpio(partition_letter: &str) -> Result<(), InstallerError> {
+    let mount_script = r#"#!/bin/sh
+# Next OS Installer - Debian Installer icin ISO mount scripti
+# Bu script d-i baslamadan once calisir ve install.iso dosyasini
+# hard disk bolumunde bulup /cdrom olarak baglar.
+
+log() {
+    logger -t nextos "$@" 2>/dev/null
+    echo "nextos: $@"
+}
+
+log "ISO mount islemi baslatiliyor..."
+
+# Gerekli kernel modullerini yukle
+modprobe loop 2>/dev/null
+modprobe ntfs3 2>/dev/null
+modprobe vfat 2>/dev/null
+modprobe iso9660 2>/dev/null
+modprobe nls_utf8 2>/dev/null
+modprobe nls_cp437 2>/dev/null
+
+# Block cihazlarin gorunmesini bekle
+sleep 3
+
+mkdir -p /hd-media
+
+# 5 denemeye kadar tara (disk gecikmeleri icin)
+attempt=0
+while [ $attempt -lt 5 ]; do
+    attempt=$((attempt + 1))
+    log "Tarama denemesi $attempt..."
+
+    for dev in /dev/sd?[0-9] /dev/sd?[0-9][0-9] /dev/nvme*n*p* /dev/mmcblk*p* /dev/vd?[0-9]; do
+        [ -b "$dev" ] || continue
+
+        # Farkli dosya sistemi tipleriyle mount dene
+        mount -t ntfs3 "$dev" /hd-media 2>/dev/null || \
+        mount -t vfat "$dev" /hd-media 2>/dev/null || \
+        mount -t ext4 "$dev" /hd-media 2>/dev/null || \
+        mount -t ext3 "$dev" /hd-media 2>/dev/null || \
+        mount "$dev" /hd-media 2>/dev/null || \
+        continue
+
+        log "$dev /hd-media'ya baglandi"
+
+        # ISO dosyasini ara
+        if [ -f /hd-media/install.iso ]; then
+            log "$dev uzerinde install.iso bulundu"
+            losetup /dev/loop0 /hd-media/install.iso
+            if [ $? -eq 0 ]; then
+                mkdir -p /cdrom
+                mount -t iso9660 -o ro /dev/loop0 /cdrom 2>/dev/null
+                if [ $? -eq 0 ]; then
+                    log "ISO basariyla /cdrom olarak baglandi"
+                    exit 0
+                else
+                    log "Uyari: loop0 iso9660 olarak baglanamadi"
+                    losetup -d /dev/loop0 2>/dev/null
+                fi
+            fi
+        fi
+
+        # Yedek: Bolumun kendisi CD yapisina sahip mi?
+        if [ -d /hd-media/.disk ] && [ -f /hd-media/.disk/info ]; then
+            log "$dev uzerinde .disk/info bulundu, bolum cdrom olarak kullaniliyor"
+            mkdir -p /cdrom
+            mount -o bind /hd-media /cdrom 2>/dev/null
+            if [ $? -eq 0 ]; then
+                log "Bolum /cdrom'a bind-mount edildi"
+                exit 0
+            fi
+        fi
+
+        umount /hd-media 2>/dev/null
+    done
+
+    log "Deneme $attempt basarisiz, bekleniyor..."
+    sleep 2
+done
+
+log "Uyari: Kurulum medyasi bulunamadi"
+exit 0
+"#;
+
+    let preseed_cfg = "\
+d-i preseed/early_command string /bin/sh /nextos-mount.sh\n\
+d-i cdrom-detect/cdrom_module string none\n\
+d-i cdrom-detect/try-usb string false\n";
+
+    let files: Vec<(&str, &[u8], u32)> = vec![
+        ("preseed.cfg", preseed_cfg.as_bytes(), 0o100644),
+        ("nextos-mount.sh", mount_script.as_bytes(), 0o100755),
+    ];
+
+    let cpio_data = create_cpio_newc_archive(&files);
+
+    let dest_path = format!("{}:\\preseed.cpio", partition_letter);
+
+    std::fs::write(&dest_path, &cpio_data).map_err(|e| {
+        InstallerError::Io(format!("preseed.cpio yazılamadı ({}): {}", dest_path, e))
+    })?;
+
+    println!(
+        "[BOOT] preseed.cpio oluşturuldu: {} ({} byte)",
+        dest_path,
+        cpio_data.len()
+    );
+    Ok(())
+}
+
 pub fn setup_grub_efi(
     iso_partition: &str,
     esp_letter: &str,
@@ -281,6 +461,7 @@ pub fn setup_grub_efi(
                 "/E", "/R:2", "/W:1",
                 "/NFL", "/NDL", "/NJH", "/NJS",
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
 
@@ -295,38 +476,68 @@ pub fn setup_grub_efi(
                 "/E", "/R:2", "/W:1",
                 "/NFL", "/NDL", "/NJH", "/NJS",
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
 
+    // ─── Live Boot from ISO (Loopback) ─────────────────────────────────────
+    // GRUB loopback ile kernel/initrd doğrudan ISO içinden yüklenir.
+    // Böylece:
+    //   1. Bölümde ayrıca kernel dosyası aranmaz.
+    //   2. live-boot başladığında ISO zaten aktif loop cihazı olduğundan
+    //      medyayı anında bulur — cdrom-detect devreye GİRMEZ.
+    //   3. Squashfs de ISO içindeki /live/filesystem.squashfs'ten gelir.
+    //
+    // boot=live : Debian/Pardus live-boot zincirini aktive eder
+    // findiso=  : live-boot'a ISO'nun disk üzerindeki yolunu söyler
+    //             (loopback zaten kurulduğundan medya anında mount edilir)
+    // components: live-config bileşenlerini çalıştırır (otomatik giriş vb.)
+    // ----------------------------------
+    let boot_keyword = if kernel_info.kernel_path.starts_with("casper/") {
+        "boot=casper"
+    } else {
+        "boot=live"
+    };
+
+    // timeout=0 + timeout_style=hidden: ilk açılışta menü gösterilmez,
+    // doğrudan Pardus Live'a geçilir (bootsequence tek seferlik olduğundan
+    // sonraki açılışlar Pardus'un kendi GRUB'una devredilir).
     let grub_cfg = format!(
-        r#"insmod loopback
-insmod iso9660
+        r#"set default=0
+set timeout=0
+set timeout_style=hidden
+
 insmod all_video
 insmod gfxterm
+insmod loopback
+insmod iso9660
+insmod ntfs
+insmod part_gpt
+insmod part_msdos
 
-set default=0
-set timeout=5
-
-menuentry "Pardus - Kurulum" {{
+menuentry "Pardus Live" {{
+    set isofile="/install.iso"
     search --no-floppy --label NextOS_Install --set root
-    loopback loop /install.iso
-    linux (loop)/{kernel} boot=live findiso=/install.iso components quiet splash noeject noprompt
+    loopback loop $isofile
+    linux (loop)/{kernel} {boot_kw} findiso=$isofile components quiet splash locales=tr_TR.UTF-8 keyboard-layouts=tr timezone=Europe/Istanbul
     initrd (loop)/{initrd}
-}}
-
-menuentry "Windows'a Don" {{
-    exit
 }}
 "#,
         kernel = kernel_info.kernel_path.replace('\\', "/"),
         initrd = kernel_info.initrd_path.replace('\\', "/"),
+        boot_kw = boot_keyword,
     );
 
+
+    // ESP üzerindeki yollar
     let cfg_locations = [
         format!("{}\\grub.cfg", esp_grub_dir),
         format!("{}\\grub\\grub.cfg", esp_grub_dir),
         format!("{}\\boot\\grub\\grub.cfg", esp_grub_dir),
+        // ISO bölümü üzerindeki yollar — GRUB binary'sinin built-in prefix'i
+        // buraya baktığından, ISO'nun orijinal grub.cfg'sini override ediyoruz.
         format!("{}:\\boot\\grub\\grub.cfg", iso_partition),
+        format!("{}:\\EFI\\boot\\grub.cfg", iso_partition),
     ];
 
     for cfg_path in &cfg_locations {
@@ -378,9 +589,10 @@ fn log_directory_tree(path: &str, depth: u32, max_depth: u32) {
 pub fn create_bcd_entry(esp_letter: &str) -> Result<String, InstallerError> {
     let create_output = Command::new("bcdedit")
         .args(["/copy", "{bootmgr}", "/d", "Next OS Installer"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| {
-            InstallerError::BootloaderConfig(format!("bcdedit başlatılamadı: {}", e))
+            InstallerError::BootloaderConfig(format!("bcdedit baÅŸlatÄ±lamadÄ±: {}", e))
         })?;
 
     let create_stdout = String::from_utf8_lossy(&create_output.stdout).to_string();
@@ -396,19 +608,24 @@ pub fn create_bcd_entry(esp_letter: &str) -> Result<String, InstallerError> {
 
     let guid = extract_guid(&create_stdout).ok_or_else(|| {
         InstallerError::BootloaderConfig(format!(
-            "bcdedit çıktısından GUID ayrıştırılamadı. Çıktı: '{}'",
+            "bcdedit Ã§Ä±ktÄ±sÄ±ndan GUID ayrÄ±ÅŸtÄ±rÄ±lamadÄ±. Ã‡Ä±ktÄ±: '{}'",
             create_stdout.trim()
         ))
     })?;
 
     println!("[BOOT] BCD firmware application giriÅŸi oluÅŸturuldu: {}", guid);
+
     run_bcdedit(&["/set", &guid, "device", &format!("partition={}:", esp_letter)])?;
+
     run_bcdedit(&["/set", &guid, "path", "\\EFI\\NextOS\\grubx64.efi"])?;
+
     run_bcdedit(&["/set", &guid, "description", "Next OS Installer"])?;
+
     run_bcdedit(&["/set", "{fwbootmgr}", "displayorder", &guid, "/addfirst"])?;
+
     run_bcdedit(&["/set", "{fwbootmgr}", "bootsequence", &guid])?;
-    run_bcdedit(&["/set", "{fwbootmgr}", "timeout", "0"])?;
-    println!("[BOOT] BCD yapılandırması tamamlandı (firmware app). GUID: {}", guid);
+
+    println!("[BOOT] BCD yapÄ±landÄ±rmasÄ± tamamlandÄ± (firmware app). GUID: {}", guid);
 
     Ok(guid)
 }
@@ -418,6 +635,7 @@ fn run_bcdedit(args: &[&str]) -> Result<String, InstallerError> {
 
     let output = Command::new("bcdedit")
         .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| {
             InstallerError::BootloaderConfig(format!(
@@ -541,54 +759,36 @@ pub fn cleanup_old_boot_entries() -> Result<Vec<String>, InstallerError> {
     Ok(deleted)
 }
 
-pub fn patch_partition_grub_configs(
-    partition_letter: &str,
-    iso_filename: &str,
-) -> Result<(), InstallerError> {
-    let root = format!("{}:\\", partition_letter);
-    let iso_param = format!("iso-scan/filename=/{} findiso=/{}", iso_filename, iso_filename);
-
+pub fn patch_partition_grub_configs(partition_letter: &str) -> Result<(), InstallerError> {
     let ps_script = format!(
         r#"
-        $root = '{}'
-        $isoParam = '{}'
-        $cfgFiles = Get-ChildItem -Path $root -Recurse -Filter 'grub.cfg' -File -ErrorAction SilentlyContinue
-        $patched = 0
-        foreach ($f in $cfgFiles) {{
-            $lines = Get-Content -Path $f.FullName -Encoding UTF8 -ErrorAction SilentlyContinue
-            if (-not $lines) {{ continue }}
-            $changed = $false
-            $newLines = @()
-            foreach ($line in $lines) {{
-                if ($line -match '^\s*(linux|linuxefi)\s+' -and $line -notmatch 'iso-scan/filename') {{
-                    $line = $line.TrimEnd() + ' ' + $isoParam
-                    $changed = $true
-                }}
-                $newLines += $line
-            }}
-            if ($changed) {{
-                Set-Content -Path $f.FullName -Value ($newLines -join "`n") -Encoding UTF8 -Force -ErrorAction Stop
-                $patched++
-            }}
+$drive = '{letter}:'
+$grubFiles = Get-ChildItem -Path $drive -Recurse -Filter 'grub.cfg' -ErrorAction SilentlyContinue
+foreach ($f in $grubFiles) {{
+    $content = Get-Content -Path $f.FullName -Raw -Encoding UTF8
+    $changed = $false
+    $lines = $content -split "`n"
+    $newLines = foreach ($line in $lines) {{
+        if (($line -match '^\s*(linux|linuxefi)\s') -and ($line -notmatch 'iso-scan/filename')) {{
+            $changed = $true
+            $line.TrimEnd() + ' iso-scan/filename=/install.iso'
+        }} else {{
+            $line
         }}
-        $patched
-        "#,
-        root.replace('\'', "''"),
-        iso_param.replace('\'', "''")
+    }}
+    if ($changed) {{
+        $newContent = $newLines -join "`n"
+        [System.IO.File]::WriteAllText($f.FullName, $newContent, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Patched: $($f.FullName)"
+    }}
+}}
+"#,
+        letter = partition_letter
     );
-
-    let output = run_powershell(&ps_script).map_err(|e| {
-        InstallerError::BootloaderConfig(format!(
-            "grub.cfg dosyaları yamalanamadı: {}", e
-        ))
+    run_powershell(&ps_script).map_err(|e| {
+        InstallerError::BootloaderConfig(format!("grub.cfg yamalamasi basarisiz: {}", e))
     })?;
-
-    let patched_count = output.trim();
-    println!(
-        "[BOOT] {} adet grub.cfg dosyası iso-scan parametresiyle yamalandı",
-        patched_count
-    );
-
+    println!("[BOOT] Partition grub.cfg dosyalari iso-scan parametresiyle yamalandi.");
     Ok(())
 }
 
@@ -597,6 +797,7 @@ pub fn reboot_system() -> Result<(), InstallerError> {
 
     let output = Command::new("shutdown")
         .args(["/r", "/t", "5", "/c", "Next OS Installer: Sistem yeniden baslatiliyor..."])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| {
             InstallerError::BootloaderConfig(format!(
