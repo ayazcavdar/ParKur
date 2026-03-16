@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Next OS Installer</title>
+  <style>
+
+    :root {
+      --primary: #ff8c00;
+      --primary-hover: #e67e00;
+      --primary-light: rgba(255, 140, 0, 0.15);
+      --bg-dark: #1a1b1e;
+      --bg-card: #2d2f31;
+      --bg-input: #1a1a1a;
+      --border: #444;
+      --text: #f0f0f0;
+      --text-muted: #999;
+      --success: #00c853;
+      --error: #ff5252;
+      --warning: #ffc107;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #2d2f31 0%, #1a1b1e 100%);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 2px solid var(--primary);
+    }
+    .header h1 {
+      font-size: 18px;
+      color: var(--primary);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .header .subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .stepper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 40px;
+      gap: 0;
+    }
+    .step-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-circle {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      transition: all 0.3s;
+    }
+    .step-circle.active {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: white;
+    }
+    .step-circle.done {
+      border-color: var(--success);
+      background: var(--success);
+      color: white;
+    }
+    .step-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      max-width: 80px;
+      text-align: center;
+      transition: color 0.3s;
+    }
+    .step-label.active { color: var(--primary); font-weight: 600; }
+    .step-label.done { color: var(--success); }
+    .step-line {
+      width: 40px; height: 2px;
+      background: var(--border);
+      margin: 0 8px;
+      transition: background 0.3s;
+    }
+    .step-line.done { background: var(--success); }
+
+    .content {
+      flex: 1;
+      padding: 0 40px 20px;
+      overflow-y: auto;
+    }
+    .step-page {
+      display: none;
+      animation: fadeIn 0.3s ease;
+    }
+    .step-page.active { display: block; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      font-size: 16px;
+      color: var(--primary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: block;
+      margin-bottom: 6px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-input);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus {
+      border-color: var(--primary);
+    }
+    input:read-only {
+      cursor: default;
+      opacity: 0.8;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      margin-bottom: 16px;
+    }
+    .input-row .field { flex: 1; }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #555;
+    }
+    .btn-small {
+      padding: 8px 16px;
+      font-size: 13px;
+    }
+
+    .footer {
+      padding: 16px 40px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+
+    .progress-container {
+      margin: 20px 0;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 24px;
+      background: var(--bg-input);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary) 0%, #ffab40 100%);
+      border-radius: 12px;
+      transition: width 0.5s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: white;
+      min-width: 40px;
+    }
+
+    .log-area {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      max-height: 180px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .log-entry {
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .log-entry.info { color: var(--text-muted); }
+    .log-entry.success { color: var(--success); }
+    .log-entry.error { color: var(--error); }
+    .log-entry.warn { color: var(--warning); }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-success { background: rgba(0,200,83,0.15); color: var(--success); }
+    .badge-error { background: rgba(255,82,82,0.15); color: var(--error); }
+    .badge-info { background: rgba(255,140,0,0.15); color: var(--primary); }
+
+    .result-icon {
+      font-size: 64px;
+      text-align: center;
+      margin: 20px 0;
+    }
+    .result-text {
+      text-align: center;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .result-sub {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }
+
+    .warning-box {
+      background: rgba(255,193,7,0.1);
+      border: 1px solid var(--warning);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--warning);
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .warning-box .icon { font-size: 18px; flex-shrink: 0; }
+  </style>
+</head>
+
+<body>
+
+  <div class="header">
+    <div>
+      <h1>Next OS Installer</h1>
+      <div class="subtitle">Pardus Linux Gecis Asistani v0.1.0</div>
+    </div>
+    <div style="margin-left:auto;">
+      <span class="badge badge-info" id="adminBadge">Kontrol ediliyor...</span>
+    </div>
+  </div>
+
+  <div class="stepper">
+    <div class="step-item">
+      <div class="step-circle active" id="stepCircle1">1</div>
+      <div class="step-label active" id="stepLabel1">ISO Secimi</div>
+    </div>
+    <div class="step-line" id="stepLine1"></div>
+    <div class="step-item">
+      <div class="step-circle" id="stepCircle2">2</div>
+      <div class="step-label" id="stepLabel2">Disk Bolum</div>
+    </div>
+    <div class="step-line" id="stepLine2"></div>
+    <div class="step-item">
+      <div class="step-circle" id="stepCircle3">3</div>
+      <div class="step-label" id="stepLabel3">Kurulum</div>
+    </div>
+    <div class="step-line" id="stepLine3"></div>
+    <div class="step-item">
+      <div class="step-circle" id="stepCircle4">4</div>
+      <div class="step-label" id="stepLabel4">Tamamlandi</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- Sayfa 1: ISO Secimi -->
+    <div class="step-page active" id="page1">
+      <div class="card">
+        <h2>ISO Dosyasi Secimi</h2>
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+          Kurmak istediginiz Pardus (veya Debian tabanli) Linux dagitiminin ISO dosyasini secin.
+        </p>
+        <div class="input-row">
+          <div class="field">
+            <label>ISO Dosya Yolu:</label>
+            <input type="text" id="isoPath" placeholder="Henuz secilmedi..." readonly />
+          </div>
+          <button class="btn btn-secondary btn-small" id="btnSelectIso" style="margin-bottom:0;">
+            SEC
+          </button>
+        </div>
+        <div id="isoStatus" style="font-size:12px; color:var(--text-muted);">
+          Lutfen bir ISO dosyasi secin.
+        </div>
+        <div class="warning-box">
+          <span class="icon">&#9888;</span>
+          <div>
+            <strong>Bilgi:</strong> ISO sectikten sonra "Baslat" butonuna basin.
+            En uygun disk bolumu otomatik bulunacak, kucultulecek ve
+            Pardus kurulum dosyalari kopyalanacaktir. Islem sonunda sistem
+            otomatik yeniden baslatilir.
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Sistem Bilgisi</h2>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:13px;">
+          <div>
+            <label>Boot Modu:</label>
+            <span id="bootModeInfo" style="color:var(--text);">Kontrol ediliyor...</span>
+          </div>
+          <div>
+            <label>Yonetici Yetkisi:</label>
+            <span id="adminInfo" style="color:var(--text);">Kontrol ediliyor...</span>
+          </div>
+        </div>
+        <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px;">
+          <button class="btn btn-secondary btn-small" id="btnCleanOldEntries" onclick="cleanOldBootEntries()">
+            &#128465; Eski Boot Kayitlarini Temizle
+          </button>
+          <span id="cleanupStatus" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sayfa 2: Disk Bolumleme -->
+    <div class="step-page" id="page2">
+      <div class="card">
+        <h2>Disk Bolum Secimi</h2>
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+          ISO dosyasi icin kullanilacak bolumu secin. Secilen bolum kucultulecek ve yeni bir bolum olusturulacaktir.
+        </p>
+        <div id="partitionList" style="margin-bottom:16px;">
+          <p style="color:var(--text-muted);">Bolumler yukleniyor...</p>
+        </div>
+        <div id="sizeSliderContainer" style="display:none; margin-top:16px;">
+          <label style="font-size:14px; font-weight:600; color:var(--text); margin-bottom:10px;">Pardus icin ayrilacak alan:</label>
+          <div style="display:flex; align-items:center; gap:12px; margin-top:8px;">
+            <span style="font-size:12px; color:var(--text-muted);" id="sliderMin">4 GB</span>
+            <input type="range" id="sizeSlider" min="4" max="100" value="20" step="1"
+              style="flex:1; accent-color:var(--primary); height:6px; cursor:pointer;" oninput="updateSliderValue()" />
+            <span style="font-size:12px; color:var(--text-muted);" id="sliderMax">100 GB</span>
+          </div>
+          <div style="text-align:center; margin-top:8px;">
+            <span style="font-size:24px; font-weight:700; color:var(--primary);" id="sliderValue">20</span>
+            <span style="font-size:14px; color:var(--text-muted);"> GB</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-top:4px;">
+            <span>Minimum: 4 GB</span>
+            <span id="sliderFreeInfo"></span>
+          </div>
+        </div>
+        <div class="warning-box">
+          <span class="icon">&#9888;</span>
+          <div>
+            <strong>Dikkat:</strong> Secilen bolum kucultulecek ve yeni bir bolum olusturulacaktir.
+            Verileriniz kaybolmaz ancak oncesinde yedek almaniz onerilir.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sayfa 2: Kurulum Ilerlemesi -->
+    <div class="step-page" id="page3">
+      <div class="card">
+        <h2>Kurulum Ilerlemesi</h2>
+        <div class="progress-container">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progressBar" style="width: 0%;">0%</div>
+          </div>
+        </div>
+        <p id="progressStep" style="font-size:14px; font-weight:600; margin-bottom:4px;">
+          Hazirlaniyor...
+        </p>
+        <p id="progressMessage" style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+          Islem baslatiliyor...
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Islem Gunlugu</h2>
+        <div class="log-area" id="logArea">
+          <div class="log-entry info">Kurulum baslatildi...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sayfa 3: Sonuc -->
+    <div class="step-page" id="page4">
+      <div class="card" style="text-align:center;">
+        <div class="result-icon" id="resultIcon">&#10003;</div>
+        <div class="result-text" id="resultTitle">Kurulum Tamamlandi!</div>
+        <div class="result-sub" id="resultMessage">
+          Sistem yeniden baslatiliyor... Pardus Live Turkce masaustu otomatik olarak acilacak.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <button class="btn btn-primary" id="btnStart" onclick="startBtn()" disabled>
+      &#9889; Baslat
+    </button>
+  </div>
+
+  <script>
+
+    const { invoke } = window.__TAURI__.core;
+    const { open } = window.__TAURI__.dialog;
+    const { listen } = window.__TAURI__.event;
+
+    const state = {
+      currentStep: 1,
+      totalSteps: 4,
+      isoPath: '',
+      isAdmin: false,
+      bootMode: '',
+      partitions: [],
+      selectedPartition: null,
+      shrinkGb: 20,
+    };
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      checkSystemInfo();
+
+      document.getElementById('btnSelectIso').addEventListener('click', selectIso);
+
+      await listen('installation-progress', (event) => {
+        const { step, progress, message } = event.payload;
+        updateProgress(progress, stepToTurkish(step), message);
+        addLog('info', message);
+      });
+    });
+
+    async function checkSystemInfo() {
+      try {
+        state.isAdmin = await invoke('check_admin');
+        document.getElementById('adminInfo').textContent = state.isAdmin ? 'Evet' : 'Hayir';
+        document.getElementById('adminInfo').style.color = state.isAdmin ? 'var(--success)' : 'var(--error)';
+        document.getElementById('adminBadge').textContent = state.isAdmin ? 'Yonetici' : 'Yetkisiz';
+        document.getElementById('adminBadge').className = state.isAdmin ? 'badge badge-success' : 'badge badge-error';
+      } catch (e) {
+        document.getElementById('adminInfo').textContent = 'Kontrol edilemedi';
+        document.getElementById('adminBadge').textContent = 'Hata';
+        document.getElementById('adminBadge').className = 'badge badge-error';
+      }
+
+      try {
+        state.bootMode = await invoke('detect_boot_mode');
+        document.getElementById('bootModeInfo').textContent = state.bootMode;
+        document.getElementById('bootModeInfo').style.color =
+          state.bootMode === 'UEFI' ? 'var(--success)' : 'var(--warning)';
+      } catch (e) {
+        document.getElementById('bootModeInfo').textContent = 'Tespit edilemedi';
+      }
+    }
+
+    async function selectIso() {
+      try {
+        const selected = await open({
+          multiple: false,
+          filters: [{ name: 'Linux ISO', extensions: ['iso'] }]
+        });
+
+        if (selected) {
+          state.isoPath = selected;
+          document.getElementById('isoPath').value = state.isoPath;
+          document.getElementById('isoStatus').innerHTML =
+            '<span style="color:var(--success);">&#10003; ISO secildi: ' + getFileName(state.isoPath) + '</span>';
+          validateStep();
+        }
+      } catch (err) {
+        document.getElementById('isoStatus').innerHTML =
+          '<span style="color:var(--error);">Hata: ' + err + '</span>';
+      }
+    }
+
+    function startBtn() {
+      if (state.currentStep === 1 && state.isoPath && state.isAdmin) {
+        state.currentStep = 2;
+        updateStepper();
+        loadPartitions();
+      } else if (state.currentStep === 2 && state.selectedPartition) {
+        state.currentStep = 3;
+        updateStepper();
+        startInstallation();
+      }
+    }
+
+    async function startInstallation() {
+      addLog('info', 'Kurulum sureci baslatildi...');
+
+      try {
+        await invoke('start_installation', {
+          isoPath: state.isoPath,
+          diskNumber: state.selectedPartition.disk_number,
+          partitionNumber: state.selectedPartition.partition_number,
+          partLetter: state.selectedPartition.drive_letter,
+          shrinkGb: state.shrinkGb || 20,
+        });
+
+        // Basarili — sistem yeniden baslatiliyor
+        state.currentStep = 4;
+        updateStepper();
+        document.getElementById('resultIcon').innerHTML = '&#10003;';
+        document.getElementById('resultIcon').style.color = 'var(--success)';
+        document.getElementById('resultTitle').textContent = 'Kurulum Tamamlandi!';
+        document.getElementById('resultMessage').textContent =
+          'Sistem yeniden baslatiliyor... Pardus Live Turkce masaustu otomatik olarak acilacak.';
+      } catch (error) {
+        addLog('error', 'HATA: ' + error);
+
+        state.currentStep = 4;
+        updateStepper();
+        document.getElementById('resultIcon').innerHTML = '&#10007;';
+        document.getElementById('resultIcon').style.color = 'var(--error)';
+        document.getElementById('resultTitle').textContent = 'Kurulum Basarisiz!';
+        document.getElementById('resultMessage').textContent = 'Hata: ' + error;
+      }
+    }
+
+    async function loadPartitions() {
+      const container = document.getElementById('partitionList');
+      container.innerHTML = '<p style="color:var(--text-muted);">Bolumler yukleniyor...</p>';
+      state.selectedPartition = null;
+      updateStepper();
+
+      try {
+        const partitions = await invoke('get_disk_partitions');
+        if (partitions.length === 0) {
+          container.innerHTML = '<p style="color:var(--error);">Uygun NTFS bolumu bulunamadi.</p>';
+          return;
+        }
+
+        let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+        html += '<tr style="border-bottom:2px solid var(--border);">';
+        html += '<th style="padding:10px 8px;text-align:left;"></th>';
+        html += '<th style="padding:10px 8px;text-align:left;">Surucu</th>';
+        html += '<th style="padding:10px 8px;text-align:left;">Etiket</th>';
+        html += '<th style="padding:10px 8px;text-align:right;">Toplam</th>';
+        html += '<th style="padding:10px 8px;text-align:right;">Bos Alan</th>';
+        html += '</tr>';
+
+        partitions.forEach((p, i) => {
+          html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;" onclick="selectPartition(' + i + ')">';
+          html += '<td style="padding:10px 8px;"><input type="radio" name="partition" id="part' + i + '" ' + (i === 0 ? 'checked' : '') + ' /></td>';
+          html += '<td style="padding:10px 8px;font-weight:600;">' + p.drive_letter + ':\\</td>';
+          html += '<td style="padding:10px 8px;">' + p.label + '</td>';
+          html += '<td style="padding:10px 8px;text-align:right;">' + p.size_gb + ' GB</td>';
+          html += '<td style="padding:10px 8px;text-align:right;color:' + (p.free_gb >= 6 ? 'var(--success)' : 'var(--error)') + ';">' + p.free_gb + ' GB</td>';
+          html += '</tr>';
+        });
+
+        html += '</table>';
+        container.innerHTML = html;
+        state.partitions = partitions;
+
+        if (partitions.length > 0) {
+          selectPartition(0);
+        }
+      } catch (err) {
+        container.innerHTML = '<p style="color:var(--error);">Hata: ' + err + '</p>';
+      }
+    }
+
+    function selectPartition(index) {
+      state.selectedPartition = state.partitions[index];
+      document.querySelectorAll('input[name="partition"]').forEach(function(el, i) {
+        el.checked = (i === index);
+      });
+
+      // Slider'i goster ve secilen bolume gore ayarla
+      const container = document.getElementById('sizeSliderContainer');
+      const slider = document.getElementById('sizeSlider');
+      const p = state.partitions[index];
+      const maxGb = Math.floor(p.free_gb - 1); // 1 GB pay birak
+      const minGb = 4;
+
+      if (maxGb >= minGb) {
+        slider.min = minGb;
+        slider.max = maxGb;
+        slider.value = Math.min(20, maxGb);
+        document.getElementById('sliderMin').textContent = minGb + ' GB';
+        document.getElementById('sliderMax').textContent = maxGb + ' GB';
+        document.getElementById('sliderFreeInfo').textContent = 'Bos alan: ' + p.free_gb + ' GB';
+        updateSliderValue();
+        container.style.display = 'block';
+      } else {
+        container.style.display = 'none';
+      }
+
+      updateStepper();
+    }
+
+    function updateSliderValue() {
+      const val = document.getElementById('sizeSlider').value;
+      document.getElementById('sliderValue').textContent = val;
+      state.shrinkGb = parseInt(val);
+    }
+
+    async function cleanOldBootEntries() {
+      const btn = document.getElementById('btnCleanOldEntries');
+      const status = document.getElementById('cleanupStatus');
+      btn.disabled = true;
+      status.textContent = 'Taraniyor...';
+      status.style.color = 'var(--text-muted)';
+
+      try {
+        const deleted = await invoke('cleanup_old_boot_entries');
+        if (deleted.length === 0) {
+          status.innerHTML = '<span style="color:var(--success);">&#10003; Eski kayit bulunamadi.</span>';
+        } else {
+          status.innerHTML = '<span style="color:var(--success);">&#10003; ' + deleted.length + ' eski kayit silindi.</span>';
+        }
+      } catch (e) {
+        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
+      }
+      btn.disabled = false;
+    }
+
+    function updateStepper() {
+      for (let i = 1; i <= state.totalSteps; i++) {
+        const circle = document.getElementById('stepCircle' + i);
+        const label = document.getElementById('stepLabel' + i);
+
+        circle.className = 'step-circle';
+        label.className = 'step-label';
+
+        if (i < state.currentStep) {
+          circle.className = 'step-circle done';
+          circle.innerHTML = '&#10003;';
+          label.className = 'step-label done';
+        } else if (i === state.currentStep) {
+          circle.className = 'step-circle active';
+          circle.textContent = i;
+          label.className = 'step-label active';
+        } else {
+          circle.textContent = i;
+        }
+
+        if (i < state.totalSteps) {
+          const line = document.getElementById('stepLine' + i);
+          line.className = i < state.currentStep ? 'step-line done' : 'step-line';
+        }
+      }
+
+      for (let i = 1; i <= state.totalSteps; i++) {
+        document.getElementById('page' + i).classList.toggle('active', i === state.currentStep);
+      }
+
+      // Baslat butonu durumu
+      const btnStart = document.getElementById('btnStart');
+      if (state.currentStep === 1) {
+        btnStart.style.display = 'inline-flex';
+        btnStart.innerHTML = '&#9889; Ileri';
+        btnStart.disabled = !(state.isoPath && state.isAdmin);
+      } else if (state.currentStep === 2) {
+        btnStart.style.display = 'inline-flex';
+        btnStart.innerHTML = '&#9889; Baslat';
+        btnStart.disabled = !state.selectedPartition;
+      } else {
+        btnStart.style.display = 'none';
+      }
+    }
+
+    function validateStep() {
+      const btnStart = document.getElementById('btnStart');
+      if (state.currentStep === 1) {
+        btnStart.disabled = !(state.isoPath && state.isAdmin);
+      } else if (state.currentStep === 2) {
+        btnStart.disabled = !state.selectedPartition;
+      }
+    }
+
+    function updateProgress(percent, stepName, message) {
+      const bar = document.getElementById('progressBar');
+      const stepEl = document.getElementById('progressStep');
+      const msgEl = document.getElementById('progressMessage');
+
+      if (percent >= 0) {
+        bar.style.width = percent + '%';
+        bar.textContent = percent + '%';
+      }
+      if (percent < 0) {
+        bar.style.width = '100%';
+        bar.style.background = 'var(--error)';
+        bar.textContent = 'HATA';
+      }
+      stepEl.textContent = stepName;
+      msgEl.textContent = message;
+    }
+
+    function addLog(type, message) {
+      const logArea = document.getElementById('logArea');
+      const time = new Date().toLocaleTimeString('tr-TR');
+      const prefix = { info: 'BILGI', success: 'BASARI', error: 'HATA', warn: 'UYARI' };
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.textContent = '[' + time + '] [' + (prefix[type] || 'BILGI') + '] ' + message;
+      logArea.appendChild(entry);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function stepToTurkish(step) {
+      const map = {
+        'check': 'Kontrol',
+        'disk': 'Disk Hazirlama',
+        'iso': 'ISO Islemi',
+        'boot': 'Bootloader',
+        'reboot': 'Yeniden Baslatma',
+      };
+      return map[step] || step;
+    }
+
+    function getFileName(path) {
+      return path.split('\\').pop().split('/').pop();
+    }
+
+    updateStepper();
+  </script>
+</body>
+</html>
