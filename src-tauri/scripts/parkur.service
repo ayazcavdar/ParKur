@@ -1,0 +1,15 @@
+[Unit]
+Description=ParKur Autonomous Installer
+After=multi-user.target
+ConditionPathExists=!/opt/parkur/.completed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/parkur/parkur-engine.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=infinity
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
