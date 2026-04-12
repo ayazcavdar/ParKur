@@ -83,14 +83,12 @@ pub fn setup_grub_efi(
     let esp_grub_dir = format!("{}:\\EFI\\NextOS", esp_letter);
     let iso_root = format!("{}:\\", iso_drive);
 
-    // ESP üzerinde dizin oluştur
+    // ESP üzerinde dizin oluştur (PowerShell -Force: eksik üst dizinleri zorla oluşturur)
     let mkdir_script = format!(
-        "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction Stop | Out-Null",
+        "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null",
         esp_grub_dir
     );
-    run_powershell(&mkdir_script).map_err(|e| {
-        InstallerError::BootloaderConfig(format!("ESP dizin oluşturulamadı: {}", e))
-    })?;
+    let _ = run_powershell(&mkdir_script);
 
     // ISO'dan GRUB EFI binary bul
     let grub_candidates = [
@@ -128,47 +126,50 @@ pub fn setup_grub_efi(
             )
         })?;
 
-    // GRUB EFI'yi ESP'ye kopyala
+    // GRUB EFI'yi ESP'ye kopyala (PowerShell -Force: EFI ACL kısıtlamasını aşar)
     let grub_dest = format!("{}\\grubx64.efi", esp_grub_dir);
-    let copy_script = format!(
+    let copy_ps = format!(
         "Copy-Item -Path '{}' -Destination '{}' -Force -ErrorAction Stop",
-        grub_source, grub_dest
+        grub_source.replace("'", "''"),
+        grub_dest.replace("'", "''")
     );
-    run_powershell(&copy_script).map_err(|e| {
+    run_powershell(&copy_ps).map_err(|e| {
         InstallerError::BootloaderConfig(format!("GRUB EFI kopyalanamadı: {}", e))
     })?;
 
     println!("[BOOT] GRUB EFI kopyalandı: {} -> {}", grub_source, grub_dest);
 
     // GRUB modüllerini kopyala (varsa)
-    let grub_modules_src = format!("{}boot\\grub", iso_root);
-    if std::path::Path::new(&grub_modules_src).is_dir() {
-        let grub_modules_dest = format!("{}\\grub", esp_grub_dir);
-        let _ = Command::new("robocopy")
-            .args([
-                &grub_modules_src,
-                &grub_modules_dest,
-                "/E",
-                "/R:2",
-                "/W:1",
-                "/NFL",
-                "/NDL",
-                "/NJH",
-                "/NJS",
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
-        println!("[BOOT] GRUB modülleri kopyalandı");
+    // ISO'daki olası GRUB modül konumlarını dene
+    let grub_module_candidates = [
+        format!("{}boot\\grub", iso_root),
+        format!("{}boot\\grub\\x86_64-efi", iso_root),
+        format!("{}EFI\\boot\\grub", iso_root),
+        format!("{}EFI\\debian\\grub", iso_root),
+    ];
 
-        // GRUB modüllerini ek konumlara kopyala (Pardus/Debian prefix uyumluluğu)
-        for extra_dest in [
-            format!("{}:\\EFI\\debian", esp_letter),
-            format!("{}:\\boot\\grub", esp_letter),
-        ] {
+    let grub_modules_src = grub_module_candidates
+        .iter()
+        .find(|p| std::path::Path::new(p.as_str()).is_dir())
+        .cloned()
+        .unwrap_or_else(|| format!("{}boot\\grub", iso_root));
+
+    if std::path::Path::new(&grub_modules_src).is_dir() {
+        // grubx64.efi derleme prefix'i bilinmediğinden tüm olası hedeflere kopyala
+        let all_module_dests = [
+            format!("{}\\grub", esp_grub_dir),               // /EFI/NextOS/grub
+            format!("{}:\\boot\\grub", esp_letter),           // /boot/grub (en yaygın)
+            format!("{}:\\EFI\\debian\\grub", esp_letter),    // Debian prefix
+            format!("{}:\\EFI\\debian", esp_letter),          // Debian flat
+            format!("{}:\\EFI\\pardus\\grub", esp_letter),    // Pardus prefix
+            format!("{}:\\grub", esp_letter),                 // root grub
+        ];
+
+        for dest in &all_module_dests {
             let _ = Command::new("robocopy")
                 .args([
                     &grub_modules_src,
-                    &extra_dest,
+                    dest,
                     "/E",
                     "/R:2",
                     "/W:1",
@@ -180,17 +181,18 @@ pub fn setup_grub_efi(
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
         }
-        println!("[BOOT] GRUB modülleri ek konumlara kopyalandı");
+        println!("[BOOT] GRUB modülleri tüm prefix konumlarına kopyalandı");
+    } else {
+        println!("[BOOT] UYARI: ISO'da GRUB modül dizini bulunamadı, insmod komutları çalışmayabilir");
     }
 
     let grub_cfg = generate_grub_cfg(kernel_info);
 
-    // grub.cfg'yi tüm olası GRUB prefix konumlarına yaz
+    // grub.cfg'yi tüm olası GRUB prefix konumlarına yaz (CRLF→LF, BOM'suz)
     let cfg_locations = [
         format!("{}\\grub.cfg", esp_grub_dir),
         format!("{}\\grub\\grub.cfg", esp_grub_dir),
         format!("{}\\boot\\grub\\grub.cfg", esp_grub_dir),
-        // Pardus/Debian GRUB prefix konumları (ESP üzerinde)
         format!("{}:\\EFI\\debian\\grub.cfg", esp_letter),
         format!("{}:\\EFI\\pardus\\grub.cfg", esp_letter),
         format!("{}:\\EFI\\BOOT\\grub.cfg", esp_letter),
@@ -199,19 +201,7 @@ pub fn setup_grub_efi(
     ];
 
     for cfg_path in &cfg_locations {
-        if let Some(parent) = std::path::Path::new(cfg_path).parent() {
-            let mkdir_ps = format!(
-                "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null",
-                parent.to_string_lossy()
-            );
-            let _ = run_powershell(&mkdir_ps);
-        }
-        let escaped = grub_cfg.replace("'", "''");
-        let write_ps = format!(
-            "Set-Content -Path '{}' -Value '{}' -Encoding UTF8 -Force -ErrorAction Stop",
-            cfg_path, escaped
-        );
-        run_powershell(&write_ps).map_err(|e| {
+        write_linux_config_file(cfg_path, &grub_cfg).map_err(|e| {
             InstallerError::BootloaderConfig(format!("grub.cfg yazılamadı ({}): {}", cfg_path, e))
         })?;
     }
@@ -220,7 +210,65 @@ pub fn setup_grub_efi(
     Ok(())
 }
 
-/// GRUB grub.cfg içeriğini oluşturur (headless/unattended kurulum).
+/// Linux hedef dosyasını CRLF → LF dönüşümü ile diske yazar. BOM eklenmez.
+/// EFI bölümüne doğrudan std::fs::write yapılamaz (OS Error 5).
+/// Çözüm: temp dizine yaz → PowerShell New-Item -Force + Copy-Item -Force ile hedef yola taşı.
+fn write_linux_config_file(path: &str, content: &str) -> Result<(), InstallerError> {
+    let lf_content = content.replace("\r\n", "\n");
+
+    // 1. Geçici dosyaya yaz (temp dizine std::fs::write sorunsuz çalışır)
+    let temp_file = std::env::temp_dir().join(format!(
+        "nextos_cfg_{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
+    std::fs::write(&temp_file, lf_content.as_bytes()).map_err(|e| {
+        InstallerError::BootloaderConfig(format!(
+            "Geçici dosya yazılamadı ({}): {}",
+            temp_file.display(),
+            e
+        ))
+    })?;
+
+    // 2. PowerShell ile üst dizini zorla oluştur + dosyayı kopyala
+    //    -Force: eksik klasör ağacını oluşturur ve ACL kısıtlamalarını aşar
+    let parent_dir = std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let ps_script = format!(
+        "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null; Copy-Item -Path '{}' -Destination '{}' -Force -ErrorAction Stop",
+        parent_dir.replace("'", "''"),
+        temp_file.to_string_lossy().replace("'", "''"),
+        path.replace("'", "''")
+    );
+
+    let result = run_powershell(&ps_script);
+
+    // Geçici dosyayı temizle
+    let _ = std::fs::remove_file(&temp_file);
+
+    result.map_err(|e| {
+        InstallerError::BootloaderConfig(format!(
+            "Dosya kopyalanamadı ({}): {}",
+            path, e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// GRUB grub.cfg içeriğini oluşturur.
+/// timeout=0: Menüde bekleme yok (mavi ekran bypass).
+/// text systemd.unit=multi-user.target: TTY hedefi (siyah ekran, log görülebilir).
+/// insmod fat: Persistence bölümü FAT32 (live-boot NTFS okuyamaz).
+///
+/// Kritik: grubx64.efi'nin derleme zamanı prefix'i bilinmediği için,
+/// grub.cfg'de hem ESP prefix'leri hem de ISO prefix'leri denenir.
+/// search --file /install.iso ile arama yapılır (label'a bağımlı değil).
 pub fn generate_grub_cfg(kernel_info: &LinuxKernelInfo) -> String {
     let boot_keyword = if kernel_info.kernel_path.starts_with("casper/") {
         "boot=casper"
@@ -228,34 +276,47 @@ pub fn generate_grub_cfg(kernel_info: &LinuxKernelInfo) -> String {
         "boot=live"
     };
 
-    format!(
-        r#"set default=0
-set timeout=0
-set timeout_style=hidden
+    let cfg = format!(
+        r#"# GRUB prefix ayarları — modülleri bulabilmesi için birden fazla konum dene
+if [ -e $prefix/x86_64-efi/normal.mod ]; then
+    true
+elif [ -e /EFI/NextOS/grub/x86_64-efi/normal.mod ]; then
+    set prefix=($root)/EFI/NextOS/grub
+elif [ -e /boot/grub/x86_64-efi/normal.mod ]; then
+    set prefix=($root)/boot/grub
+elif [ -e /EFI/debian/grub/x86_64-efi/normal.mod ]; then
+    set prefix=($root)/EFI/debian/grub
+fi
 
+set default="0"
+set timeout="0"
+set timeout_style="hidden"
+
+insmod part_gpt
+insmod part_msdos
+insmod fat
+insmod search
+insmod search_label
+insmod search_fs_file
 insmod all_video
 insmod gfxterm
 insmod loopback
 insmod iso9660
-insmod ntfs
-insmod part_gpt
-insmod part_msdos
-insmod linux
 
-menuentry "ParKur Unattended Install" {{
+menuentry "Pardus Live" {{
     set isofile="/install.iso"
-    search --no-floppy --label NextOS_Install --set root
+    search --no-floppy --file $isofile --set root
     loopback loop $isofile
-    linux (loop)/{kernel} {boot_kw} findiso=$isofile toram \
-        systemd.unit=multi-user.target textonly \
-        noprompt noeject quiet nosplash \
-        locales=tr_TR.UTF-8 keyboard-layouts=tr timezone=Europe/Istanbul
-    initrd (loop)/{initrd} /parkur-hook.img
+    linux (loop)/{kernel} {boot_kw} findiso=$isofile components quiet splash locales=tr_TR.UTF-8 keyboard-layouts=tr timezone=Europe/Istanbul text systemd.unit=multi-user.target
+    initrd (loop)/{initrd}
 }}"#,
         kernel = kernel_info.kernel_path.replace('\\', "/"),
         initrd = kernel_info.initrd_path.replace('\\', "/"),
         boot_kw = boot_keyword,
-    )
+    );
+
+    // CRLF → LF koruması
+    cfg.replace("\r\n", "\n")
 }
 
 /// Data bölümüne grub.cfg yazar (GRUB'ın veri bölümünde de config bulabilmesi için).
@@ -265,6 +326,7 @@ pub fn write_grub_cfg_to_data_partition(
 ) -> Result<(), InstallerError> {
     let grub_cfg = generate_grub_cfg(kernel_info);
 
+    // CRLF→LF dönüşümü ile grub.cfg yaz
     let cfg_locations = [
         format!("{}:\\boot\\grub\\grub.cfg", data_letter),
         format!("{}:\\grub\\grub.cfg", data_letter),
@@ -272,19 +334,7 @@ pub fn write_grub_cfg_to_data_partition(
     ];
 
     for cfg_path in &cfg_locations {
-        if let Some(parent) = std::path::Path::new(cfg_path).parent() {
-            let mkdir_ps = format!(
-                "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null",
-                parent.to_string_lossy()
-            );
-            let _ = run_powershell(&mkdir_ps);
-        }
-        let escaped = grub_cfg.replace("'", "''");
-        let write_ps = format!(
-            "Set-Content -Path '{}' -Value '{}' -Encoding UTF8 -Force -ErrorAction Stop",
-            cfg_path, escaped
-        );
-        let _ = run_powershell(&write_ps);
+        let _ = write_linux_config_file(cfg_path, &grub_cfg);
     }
 
     println!("[BOOT] Data partition grub.cfg yazıldı: {}:\\", data_letter);

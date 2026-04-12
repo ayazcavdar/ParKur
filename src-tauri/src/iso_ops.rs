@@ -8,6 +8,13 @@ pub struct LinuxKernelInfo {
     pub initrd_path: String,
 }
 
+/// ISO dosyasının boyutunu MB cinsinden döndürür.
+pub fn get_iso_size_mb(iso_path: &str) -> Result<u64, InstallerError> {
+    let metadata = std::fs::metadata(iso_path)
+        .map_err(|e| InstallerError::Io(format!("ISO dosya boyutu okunamadı: {}", e)))?;
+    Ok(metadata.len() / (1024 * 1024))
+}
+
 const KERNEL_SEARCH_PATHS: &[(&str, &str)] = &[
     ("live/vmlinuz", "live/initrd.img"),
     ("live/vmlinuz", "live/initrd"),

@@ -365,10 +365,10 @@
         <div class="warning-box">
           <span class="icon">&#9888;</span>
           <div>
-            <strong>Bilgi:</strong> ISO sectikten sonra kullanici bilgilerinizi ve hedef diski secin.
-            Sistem otomatik olarak yeniden baslatilacak ve Pardus
-            arka planda (headless) kurulacaktir. Kurulum tamamlaninca
-            sistem kalici Pardus ile acilacaktir.
+            <strong>Bilgi:</strong> ISO sectikten sonra "Baslat" butonuna basin.
+            En uygun disk bolumu otomatik bulunacak, kucultulecek ve
+            Pardus kurulum dosyalari kopyalanacaktir. Islem sonunda sistem
+            otomatik yeniden baslatilir.
           </div>
         </div>
       </div>
@@ -399,39 +399,27 @@
       <div class="card">
         <h2>Kullanici Bilgileri</h2>
         <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
-          Pardus kurulumunda kullanilacak hesap bilgilerini girin.
+          Linux sisteminde olusturulacak kullanici bilgilerini girin.
         </p>
-        <div class="input-row">
-          <div class="field">
-            <label>Kullanici Adi: *</label>
-            <input type="text" id="inputUsername" placeholder="ornek: ayaz" oninput="validateUserStep()" />
-          </div>
+        <div style="margin-bottom:16px;">
+          <label>Kullanici Adi (bosluksuz, kucuk harf):</label>
+          <input type="text" id="userName" placeholder="Orn: ahmet" oninput="formatUsername()" />
+          <span id="userNameHint" style="font-size:11px; color:var(--text-muted);"></span>
         </div>
-        <div style="font-size:11px; color:var(--text-muted); margin-top:-10px; margin-bottom:12px;">
-          Kucuk harf, rakam, tire ve alt cizgi. Harf ile baslamali.
+        <div style="margin-bottom:16px;">
+          <label>Sifre:</label>
+          <input type="password" id="userPassword" placeholder="Linux giris sifresi" oninput="validateStep()" />
         </div>
-        <div class="input-row">
-          <div class="field">
-            <label>Sifre: *</label>
-            <input type="password" id="inputPassword" placeholder="En az 4 karakter" oninput="validateUserStep()" />
-          </div>
-          <div class="field">
-            <label>Sifre Tekrar: *</label>
-            <input type="password" id="inputPasswordConfirm" placeholder="Sifreyi tekrarlayin" oninput="validateUserStep()" />
-          </div>
+        <div style="margin-bottom:16px;">
+          <label>Sifre Tekrar:</label>
+          <input type="password" id="userPasswordConfirm" placeholder="Sifreyi tekrar girin" oninput="validateStep()" />
+          <span id="passwordMatchHint" style="font-size:11px; color:var(--text-muted);"></span>
         </div>
-        <div class="input-row">
-          <div class="field">
-            <label>Bilgisayar Adi:</label>
-            <input type="text" id="inputHostname" placeholder="pardus" value="pardus" oninput="validateUserStep()" />
-          </div>
-        </div>
-        <div id="userConfigStatus" style="font-size:12px; color:var(--text-muted); margin-top:8px;"></div>
         <div class="warning-box">
-          <span class="icon">&#128274;</span>
+          <span class="icon">&#9888;</span>
           <div>
-            <strong>Guvenlik:</strong> Sifreniz diske sifrelenmis (SHA-512 hash) olarak yazilir.
-            Duz metin sifre diske asla kaydedilmez.
+            <strong>Bilgi:</strong> Bu bilgiler Linux kurulumunda otomatik kullanici olusturmak icin kullanilacaktir.
+            Kullanici sudo yetkisine sahip olacaktir.
           </div>
         </div>
       </div>
@@ -505,7 +493,7 @@
         <div class="result-icon" id="resultIcon">&#10003;</div>
         <div class="result-text" id="resultTitle">Kurulum Tamamlandi!</div>
         <div class="result-sub" id="resultMessage">
-          Sistem yeniden baslatiliyor... Pardus otonom kurulum arka planda otomatik olarak baslatilacak.
+          Sistem yeniden baslatiliyor... Pardus Live Turkce masaustu otomatik olarak acilacak.
         </div>
       </div>
     </div>
@@ -528,18 +516,14 @@
       currentStep: 1,
       totalSteps: 5,
       isoPath: '',
+      isoSizeMb: 0,
       isAdmin: false,
       bootMode: '',
       partitions: [],
       selectedPartition: null,
       shrinkGb: 20,
-      // Kullanici bilgileri
-      username: '',
+      userName: '',
       password: '',
-      hostname: 'pardus',
-      locale: 'tr_TR.UTF-8',
-      timezone: 'Europe/Istanbul',
-      keyboard: 'tr',
     };
 
     document.addEventListener('DOMContentLoaded', async () => {
@@ -589,6 +573,17 @@
           document.getElementById('isoPath').value = state.isoPath;
           document.getElementById('isoStatus').innerHTML =
             '<span style="color:var(--success);">&#10003; ISO secildi: ' + getFileName(state.isoPath) + '</span>';
+
+          // ISO boyutunu al (slider minimum hesabı için)
+          try {
+            state.isoSizeMb = await invoke('get_iso_size_mb', { path: state.isoPath });
+            document.getElementById('isoStatus').innerHTML +=
+              ' <span style="color:var(--text-muted);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
+          } catch (e) {
+            console.error('ISO boyutu alinamadi:', e);
+            state.isoSizeMb = 3000; // fallback
+          }
+
           validateStep();
         }
       } catch (err) {
@@ -597,53 +592,17 @@
       }
     }
 
-    function validateUserStep() {
-      const u = document.getElementById('inputUsername').value.trim();
-      const p = document.getElementById('inputPassword').value;
-      const pc = document.getElementById('inputPasswordConfirm').value;
-      const h = document.getElementById('inputHostname').value.trim();
-      const statusEl = document.getElementById('userConfigStatus');
-
-      let valid = true;
-      let msg = '';
-
-      if (!u || u.length < 1 || u.length > 32) {
-        valid = false; msg = 'Kullanici adi 1-32 karakter olmali.';
-      } else if (!/^[a-z][a-z0-9_-]*$/.test(u)) {
-        valid = false; msg = 'Kucuk harf ile baslamali, sadece kucuk harf/rakam/tire/alt cizgi.';
-      } else if (p.length < 4) {
-        valid = false; msg = 'Sifre en az 4 karakter olmali.';
-      } else if (p !== pc) {
-        valid = false; msg = 'Sifreler eslesmiyor.';
-      } else if (!h) {
-        valid = false; msg = 'Bilgisayar adi bos olamaz.';
-      }
-
-      if (valid) {
-        state.username = u;
-        state.password = p;
-        state.hostname = h;
-        statusEl.innerHTML = '<span style="color:var(--success);">&#10003; Bilgiler gecerli</span>';
-      } else {
-        state.username = '';
-        state.password = '';
-        statusEl.innerHTML = '<span style="color:var(--warning);">' + msg + '</span>';
-      }
-      validateStep();
-    }
-
     function startBtn() {
       if (state.currentStep === 1 && state.isoPath && state.isAdmin) {
-        // Sayfa 1 → 2 (Kullanici Bilgileri)
         state.currentStep = 2;
         updateStepper();
-      } else if (state.currentStep === 2 && state.username && state.password) {
-        // Sayfa 2 → 3 (Disk Secimi)
+      } else if (state.currentStep === 2 && validateUserInfo()) {
+        state.userName = document.getElementById('userName').value.trim();
+        state.password = document.getElementById('userPassword').value;
         state.currentStep = 3;
         updateStepper();
         loadPartitions();
       } else if (state.currentStep === 3 && state.selectedPartition) {
-        // Sayfa 3 → 4 (Kurulum)
         state.currentStep = 4;
         updateStepper();
         startInstallation();
@@ -660,22 +619,18 @@
           partitionNumber: state.selectedPartition.partition_number,
           partLetter: state.selectedPartition.drive_letter,
           shrinkGb: state.shrinkGb || 20,
-          username: state.username,
+          userName: state.userName,
           password: state.password,
-          hostname: state.hostname,
-          locale: state.locale,
-          timezone: state.timezone,
-          keyboard: state.keyboard,
         });
 
-        // Basarili
+        // Basarili — sistem yeniden baslatiliyor
         state.currentStep = 5;
         updateStepper();
         document.getElementById('resultIcon').innerHTML = '&#10003;';
         document.getElementById('resultIcon').style.color = 'var(--success)';
         document.getElementById('resultTitle').textContent = 'Kurulum Tamamlandi!';
         document.getElementById('resultMessage').textContent =
-          'Sistem yeniden baslatiliyor... Pardus otonom kurulum otomatik olarak baslayacak.';
+          'Sistem yeniden baslatiliyor... Pardus Linux otomatik olarak acilacak.';
       } catch (error) {
         addLog('error', 'HATA: ' + error);
 
@@ -738,11 +693,16 @@
         el.checked = (i === index);
       });
 
+      // Slider'i goster ve secilen bolume gore ayarla
       const container = document.getElementById('sizeSliderContainer');
       const slider = document.getElementById('sizeSlider');
       const p = state.partitions[index];
-      const maxGb = Math.floor(p.free_gb - 1);
-      const minGb = 4;
+      const maxGb = Math.floor(p.free_gb - 1); // 1 GB pay birak
+
+      // ISO boyutuna gore minimum: persistence(iso+1024) + guvenlik(50) + linux min(4096)
+      const isoMb = state.isoSizeMb || 3000;
+      const minTotalMb = isoMb + 1024 + 50 + 4096;
+      const minGb = Math.max(4, Math.ceil(minTotalMb / 1024));
 
       if (maxGb >= minGb) {
         slider.min = minGb;
@@ -808,16 +768,15 @@
 
         if (i < state.totalSteps) {
           const line = document.getElementById('stepLine' + i);
-          if (line) line.className = i < state.currentStep ? 'step-line done' : 'step-line';
+          line.className = i < state.currentStep ? 'step-line done' : 'step-line';
         }
       }
 
       for (let i = 1; i <= state.totalSteps; i++) {
-        const page = document.getElementById('page' + i);
-        if (page) page.classList.toggle('active', i === state.currentStep);
+        document.getElementById('page' + i).classList.toggle('active', i === state.currentStep);
       }
 
-      // Buton durumu
+      // Baslat butonu durumu
       const btnStart = document.getElementById('btnStart');
       if (state.currentStep === 1) {
         btnStart.style.display = 'inline-flex';
@@ -826,7 +785,7 @@
       } else if (state.currentStep === 2) {
         btnStart.style.display = 'inline-flex';
         btnStart.innerHTML = '&#9889; Ileri';
-        btnStart.disabled = !(state.username && state.password);
+        btnStart.disabled = !validateUserInfo();
       } else if (state.currentStep === 3) {
         btnStart.style.display = 'inline-flex';
         btnStart.innerHTML = '&#9889; Baslat';
@@ -837,7 +796,54 @@
     }
 
     function validateStep() {
-      updateStepper();
+      const btnStart = document.getElementById('btnStart');
+      if (state.currentStep === 1) {
+        btnStart.disabled = !(state.isoPath && state.isAdmin);
+      } else if (state.currentStep === 2) {
+        btnStart.disabled = !validateUserInfo();
+      } else if (state.currentStep === 3) {
+        btnStart.disabled = !state.selectedPartition;
+      }
+    }
+
+    function validateUserInfo() {
+      const userName = document.getElementById('userName').value.trim();
+      const password = document.getElementById('userPassword').value;
+      const passwordConfirm = document.getElementById('userPasswordConfirm').value;
+      const hint = document.getElementById('passwordMatchHint');
+
+      if (!userName || !password || !passwordConfirm) {
+        if (hint) hint.textContent = '';
+        return false;
+      }
+      if (!/^[a-z][a-z0-9_-]*$/.test(userName)) return false;
+      if (userName.length > 32) return false;
+
+      if (password !== passwordConfirm) {
+        if (hint) hint.innerHTML = '<span style="color:var(--error);">Sifreler eslesmedi!</span>';
+        return false;
+      } else {
+        if (hint) hint.innerHTML = '<span style="color:var(--success);">&#10003; Sifreler eslesiyor</span>';
+      }
+      return true;
+    }
+
+    function formatUsername() {
+      const input = document.getElementById('userName');
+      const hint = document.getElementById('userNameHint');
+      let val = input.value.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (val && !/^[a-z]/.test(val)) {
+        val = val.replace(/^[^a-z]+/, '');
+      }
+      input.value = val;
+      if (val && /^[a-z][a-z0-9_-]*$/.test(val)) {
+        hint.innerHTML = '<span style="color:var(--success);">&#10003; Gecerli</span>';
+      } else if (val) {
+        hint.innerHTML = '<span style="color:var(--error);">Kucuk harfle baslamali, bosluk icermemeli</span>';
+      } else {
+        hint.textContent = '';
+      }
+      validateStep();
     }
 
     function updateProgress(percent, stepName, message) {
@@ -875,7 +881,6 @@
         'disk': 'Disk Hazirlama',
         'iso': 'ISO Islemi',
         'boot': 'Bootloader',
-        'config': 'Yapilandirma',
         'reboot': 'Yeniden Baslatma',
       };
       return map[step] || step;

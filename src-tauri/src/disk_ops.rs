@@ -11,6 +11,14 @@ pub struct NewPartitionResult {
     pub size_mb: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DualPartitionResult {
+    pub persistence_letter: String,
+    pub persistence_mb: u64,
+    pub linux_partition_number: u32,
+    pub linux_mb: u64,
+}
+
 /// PowerShell komutunu pencere açmadan çalıştırır.
 pub fn run_powershell(script: &str) -> Result<String, InstallerError> {
     let output = Command::new("powershell")
@@ -216,9 +224,107 @@ pub struct PartitionInfo {
     pub free_gb: f64,
 }
 
+/// Bölümü küçültür, FAT32 Persistence ve raw Linux bölümü oluşturur.
+/// Sıralama: önce Persistence, sonra Linux. FAT32 zorunlu (live-boot NTFS okuyamaz).
+pub fn shrink_and_create_dual_partitions(
+    disk_number: u32,
+    partition_number: u32,
+    total_shrink_mb: u64,
+    iso_size_mb: u64,
+) -> Result<DualPartitionResult, InstallerError> {
+    // Disk boyutlandırma matematiği
+    let persistence_mb = iso_size_mb + 1024;
+    let linux_mb = total_shrink_mb
+        .checked_sub(persistence_mb + 50)
+        .ok_or_else(|| {
+            InstallerError::DiskOperation(format!(
+                "Yetersiz alan: toplam {} MB, persistence {} MB + 50 MB güvenlik tamponu gerekli.",
+                total_shrink_mb, persistence_mb
+            ))
+        })?;
+
+    if linux_mb < 4096 {
+        return Err(InstallerError::DiskOperation(format!(
+            "Linux bölümü için en az 4 GB alan gerekli. Mevcut: {} MB.",
+            linux_mb
+        )));
+    }
+
+    println!(
+        "[DISK] Dual partition: persistence={} MB (FAT32), linux={} MB, toplam shrink={} MB",
+        persistence_mb, linux_mb, total_shrink_mb
+    );
+
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+
+try {{
+    $disk = {disk}
+    $partNum = {part}
+    $totalShrinkBytes = [int64]{total} * 1048576
+    $persistBytes = [int64]{persist} * 1048576
+    $linuxBytes = [int64]{linux} * 1048576
+
+    # 1. Shrink secilen bolumu
+    $partition = Get-Partition -DiskNumber $disk -PartitionNumber $partNum
+    $newSize = $partition.Size - $totalShrinkBytes
+    Resize-Partition -DiskNumber $disk -PartitionNumber $partNum -Size $newSize
+
+    # 2. Persistence bolumu - HARF ATAMADAN olustur (Windows popup engellemesi)
+    $pp = New-Partition -DiskNumber $disk -Size $persistBytes
+    Start-Sleep -Seconds 2
+
+    # 3. Format: Partition numarasina gore sessizce FAT32 formatla
+    $ppNum = $pp.PartitionNumber
+    Get-Partition -DiskNumber $disk -PartitionNumber $ppNum | Format-Volume -FileSystem FAT32 -NewFileSystemLabel 'NextOS_Install' -Confirm:$false -Force | Out-Null
+
+    # 4. Format bittikten SONRA surucu harfi ata
+    $pp = Add-PartitionAccessPath -DiskNumber $disk -PartitionNumber $ppNum -AssignDriveLetter -PassThru
+    Start-Sleep -Seconds 1
+    $pp = Get-Partition -DiskNumber $disk -PartitionNumber $ppNum
+    $pLetter = [string]$pp.DriveLetter
+
+    # 5. Linux bolumu - SONRA olustur (format yok, Linux halledecek)
+    $lp = New-Partition -DiskNumber $disk -Size $linuxBytes
+
+    # Saf JSON cikti
+    '{{"persistence_letter":"' + $pLetter + '","persistence_mb":{persist},"linux_partition_number":' + [string][int]$lp.PartitionNumber + ',"linux_mb":{linux}}}'
+}} catch {{
+    Write-Error $_.Exception.Message
+    exit 1
+}}
+"#,
+        disk = disk_number,
+        part = partition_number,
+        total = total_shrink_mb,
+        persist = persistence_mb,
+        linux = linux_mb,
+    );
+
+    let output = run_powershell(&script)?;
+    let trimmed = output.trim();
+    println!("[DISK] PowerShell çıktısı: {}", trimmed);
+
+    let result: DualPartitionResult = serde_json::from_str(trimmed).map_err(|e| {
+        InstallerError::JsonParse(format!(
+            "Bölüm sonucu ayrıştırılamadı: {} (çıktı: {})",
+            e, trimmed
+        ))
+    })?;
+
+    Ok(result)
+}
+
 /// Tüm NTFS bölümlerini listeler.
 pub fn list_partitions() -> Result<Vec<PartitionInfo>, InstallerError> {
     let script = r#"
+        $ProgressPreference = 'SilentlyContinue'
+        $WarningPreference = 'SilentlyContinue'
+        $InformationPreference = 'SilentlyContinue'
         $results = @()
         Get-Disk | Where-Object { $_.OperationalStatus -eq 'Online' } | ForEach-Object {
             $disk = $_
