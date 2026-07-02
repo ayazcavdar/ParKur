@@ -1,0 +1,141 @@
+#!/bin/sh
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+. /scripts/functions
+
+NEXTOS_HOST_SERIAL=""
+NEXTOS_ROOT_DISK_PATH="/NextOS/root.disk"
+NEXTOS_SQUASHFS_PATH="/NextOS/filesystem.squashfs"
+NEXTOS_HOST_MOUNT="/host"
+
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        nextos_host_serial=*) NEXTOS_HOST_SERIAL="${arg#nextos_host_serial=}" ;;
+        nextos_root_disk=*)   NEXTOS_ROOT_DISK_PATH="${arg#nextos_root_disk=}" ;;
+        nextos_squashfs=*)    NEXTOS_SQUASHFS_PATH="${arg#nextos_squashfs=}" ;;
+    esac
+done
+
+if [ -z "$NEXTOS_HOST_SERIAL" ]; then
+    panic "nextos-loop: nextos_host_serial missing from kernel cmdline"
+fi
+
+log_begin_msg "NextOS: loading kernel modules"
+modprobe loop    2>/dev/null || true
+modprobe ext4    2>/dev/null || true
+modprobe squashfs 2>/dev/null || true
+modprobe ntfs3   2>/dev/null || modprobe ntfs 2>/dev/null || true
+log_end_msg
+
+normalize_serial() {
+    echo "$1" | tr '[:lower:]' '[:upper:]' | tr -d '- '
+}
+
+WANT_SERIAL=$(normalize_serial "$NEXTOS_HOST_SERIAL")
+NEXTOS_HOST_DEV=""
+
+log_begin_msg "NextOS: locating host NTFS volume (serial=$WANT_SERIAL)"
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    # udevadm settle ensures new block devices are visible
+    udevadm settle --timeout=2 2>/dev/null || true
+
+    # -p forces probe (no stale cache), iterate over every block device
+    for candidate in $(blkid -p -o device 2>/dev/null); do
+        fs_type=$(blkid -p -s TYPE -o value "$candidate" 2>/dev/null || true)
+        case "$fs_type" in
+            ntfs|ntfs3) ;;
+            *) continue ;;
+        esac
+        cand_serial=$(blkid -p -s UUID -o value "$candidate" 2>/dev/null || true)
+        cand_norm=$(normalize_serial "$cand_serial")
+        if [ -n "$cand_norm" ] && [ "$cand_norm" = "$WANT_SERIAL" ]; then
+            NEXTOS_HOST_DEV="$candidate"
+            break 2
+        fi
+    done
+    sleep 1
+done
+log_end_msg
+
+if [ -z "$NEXTOS_HOST_DEV" ]; then
+    panic "nextos-loop: NTFS volume with serial=$WANT_SERIAL not found (checked 15s)"
+fi
+
+mkdir -p "$NEXTOS_HOST_MOUNT"
+NTFS_OPTS_RW="rw,uid=0,gid=0,umask=0022,noatime"
+
+log_begin_msg "NextOS: mounting host $NEXTOS_HOST_DEV → $NEXTOS_HOST_MOUNT"
+if ! mount -t ntfs3 -o "$NTFS_OPTS_RW" "$NEXTOS_HOST_DEV" "$NEXTOS_HOST_MOUNT" 2>/dev/null; then
+    if ! mount -t ntfs  -o "$NTFS_OPTS_RW,recover" "$NEXTOS_HOST_DEV" "$NEXTOS_HOST_MOUNT" 2>/dev/null; then
+        panic "nextos-loop: cannot mount NTFS host (Windows Fast Startup / hibernation may be enabled)"
+    fi
+fi
+log_end_msg
+
+NEXTOS_IMAGE="$NEXTOS_HOST_MOUNT$NEXTOS_ROOT_DISK_PATH"
+if [ ! -f "$NEXTOS_IMAGE" ]; then
+    panic "nextos-loop: root.disk not found at $NEXTOS_IMAGE"
+fi
+
+log_begin_msg "NextOS: attaching $NEXTOS_IMAGE as loop device"
+NEXTOS_LOOP_DEV=$(losetup --find --show "$NEXTOS_IMAGE" 2>/dev/null || true)
+if [ -z "$NEXTOS_LOOP_DEV" ]; then
+    panic "nextos-loop: losetup failed for $NEXTOS_IMAGE"
+fi
+log_end_msg
+
+NEXTOS_LOOP_FSTYPE=$(blkid -p -s TYPE -o value "$NEXTOS_LOOP_DEV" 2>/dev/null || true)
+if [ -z "$NEXTOS_LOOP_FSTYPE" ]; then
+    log_begin_msg "NextOS: raw root.disk — formatting ext4 in-flight (first boot only)"
+    NEXTOS_SQUASH_IMG="$NEXTOS_HOST_MOUNT$NEXTOS_SQUASHFS_PATH"
+    if [ ! -f "$NEXTOS_SQUASH_IMG" ]; then
+        panic "nextos-loop: squashfs not found at $NEXTOS_SQUASH_IMG"
+    fi
+    NEXTOS_MKFS_ROOT="/run/nextos-mkfs"
+    mkdir -p "$NEXTOS_MKFS_ROOT"
+    if ! mount -t squashfs -o loop,ro "$NEXTOS_SQUASH_IMG" "$NEXTOS_MKFS_ROOT" 2>/dev/null; then
+        panic "nextos-loop: cannot mount squashfs for in-flight mkfs"
+    fi
+    mkdir -p "$NEXTOS_MKFS_ROOT/dev" "$NEXTOS_MKFS_ROOT/proc" "$NEXTOS_MKFS_ROOT/sys"
+    mount --bind /dev  "$NEXTOS_MKFS_ROOT/dev"
+    mount --bind /proc "$NEXTOS_MKFS_ROOT/proc"
+    mount --bind /sys  "$NEXTOS_MKFS_ROOT/sys"
+    NEXTOS_MKFS_RC=0
+    chroot "$NEXTOS_MKFS_ROOT" /sbin/mkfs.ext4 -F -L NEXTOS_ROOT "$NEXTOS_LOOP_DEV" \
+        || NEXTOS_MKFS_RC=$?
+    umount "$NEXTOS_MKFS_ROOT/sys"  2>/dev/null || true
+    umount "$NEXTOS_MKFS_ROOT/proc" 2>/dev/null || true
+    umount "$NEXTOS_MKFS_ROOT/dev"  2>/dev/null || true
+    umount "$NEXTOS_MKFS_ROOT"      2>/dev/null || true
+    rmdir  "$NEXTOS_MKFS_ROOT"      2>/dev/null || true
+    if [ "$NEXTOS_MKFS_RC" -ne 0 ]; then
+        panic "nextos-loop: in-flight mkfs.ext4 failed (rc=$NEXTOS_MKFS_RC)"
+    fi
+    log_end_msg
+else
+    log_begin_msg "NextOS: existing $NEXTOS_LOOP_FSTYPE on root.disk — skipping format"
+    log_end_msg
+fi
+
+mkdir -p /run/nextos
+echo "$NEXTOS_LOOP_DEV"                              > /run/nextos/loopdev
+echo "$NEXTOS_HOST_MOUNT"                            > /run/nextos/hostmount
+echo "$NEXTOS_HOST_MOUNT$NEXTOS_SQUASHFS_PATH"       > /run/nextos/squashfs
+echo "$NEXTOS_ROOT_DISK_PATH"                        > /run/nextos/imagepath
+
+# Tell initramfs-tools which device is the root filesystem
+export ROOT="$NEXTOS_LOOP_DEV"
+export ROOTFLAGS="rw,noatime,errors=remount-ro,commit=60"
+export ROOTFSTYPE="ext4"
+
+# /conf/param.conf is sourced by the 'local' script after local-top hooks
+{
+    echo "ROOT=$NEXTOS_LOOP_DEV"
+    echo "ROOTFLAGS=$ROOTFLAGS"
+    echo "ROOTFSTYPE=$ROOTFSTYPE"
+} > /conf/param.conf

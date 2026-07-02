@@ -1,0 +1,82 @@
+#!/bin/sh
+set -e
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+. /scripts/functions
+
+NEXTOS_FLAG="/.nextos-bootstrapped"
+NEXTOS_STATE_DIR="/run/nextos"
+
+if [ -f "${rootmnt}${NEXTOS_FLAG}" ]; then
+    exit 0
+fi
+
+if [ ! -d "$NEXTOS_STATE_DIR" ]; then
+    panic "nextos-bootstrap: state directory missing"
+fi
+
+NEXTOS_HOST_MOUNT=$(cat "$NEXTOS_STATE_DIR/hostmount")
+NEXTOS_SQUASHFS=$(cat "$NEXTOS_STATE_DIR/squashfs")
+NEXTOS_IMAGE_PATH=$(cat "$NEXTOS_STATE_DIR/imagepath")
+
+if [ -z "$NEXTOS_HOST_MOUNT" ] || [ -z "$NEXTOS_SQUASHFS" ]; then
+    panic "nextos-bootstrap: state files corrupt"
+fi
+
+if [ ! -f "$NEXTOS_SQUASHFS" ]; then
+    panic "nextos-bootstrap: squashfs payload $NEXTOS_SQUASHFS missing"
+fi
+
+log_begin_msg "NextOS: first-boot rootfs extraction (this happens only once)"
+NEXTOS_SQUASH_MNT="/run/nextos.squash-src"
+mkdir -p "$NEXTOS_SQUASH_MNT"
+mount -t squashfs -o loop,ro "$NEXTOS_SQUASHFS" "$NEXTOS_SQUASH_MNT"
+
+cp -a "$NEXTOS_SQUASH_MNT/." "$rootmnt/"
+
+umount "$NEXTOS_SQUASH_MNT" 2>/dev/null || true
+rmdir "$NEXTOS_SQUASH_MNT" 2>/dev/null || true
+log_end_msg
+
+log_begin_msg "NextOS: staging provisioning payload"
+mkdir -p "$rootmnt/var/lib/nextos"
+if [ -f "$NEXTOS_HOST_MOUNT/NextOS/nextos.conf" ]; then
+    cp "$NEXTOS_HOST_MOUNT/NextOS/nextos.conf" "$rootmnt/var/lib/nextos/nextos.conf"
+    chmod 600 "$rootmnt/var/lib/nextos/nextos.conf"
+fi
+
+mkdir -p "$rootmnt/usr/local/sbin"
+cp /scripts/local-top/nextos-loop "$rootmnt/var/lib/nextos/nextos-loop.hook"
+chmod 0644 "$rootmnt/var/lib/nextos/nextos-loop.hook"
+cp /usr/local/sbin/nextos-firstboot "$rootmnt/usr/local/sbin/nextos-firstboot"
+chmod 0755 "$rootmnt/usr/local/sbin/nextos-firstboot"
+
+cat > "$rootmnt/etc/systemd/system/nextos-firstboot.service" <<'UNIT'
+[Unit]
+Description=NextOS First Boot Provisioning
+ConditionPathExists=!/var/lib/nextos/firstboot-complete
+After=local-fs.target
+Before=display-manager.service getty.target multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nextos-firstboot
+RemainAfterExit=true
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+mkdir -p "$rootmnt/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/nextos-firstboot.service \
+    "$rootmnt/etc/systemd/system/multi-user.target.wants/nextos-firstboot.service"
+
+touch "$rootmnt$NEXTOS_FLAG"
+log_end_msg

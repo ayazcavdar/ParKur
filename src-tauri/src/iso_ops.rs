@@ -1,5 +1,5 @@
-use crate::disk_ops::run_powershell;
 use crate::error::InstallerError;
+use crate::util::run_powershell;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -8,10 +8,9 @@ pub struct LinuxKernelInfo {
     pub initrd_path: String,
 }
 
-/// ISO dosyasının boyutunu MB cinsinden döndürür.
 pub fn get_iso_size_mb(iso_path: &str) -> Result<u64, InstallerError> {
     let metadata = std::fs::metadata(iso_path)
-        .map_err(|e| InstallerError::Io(format!("ISO dosya boyutu okunamadı: {}", e)))?;
+        .map_err(|e| InstallerError::Io(format!("ISO size read failed: {}", e)))?;
     Ok(metadata.len() / (1024 * 1024))
 }
 
@@ -24,22 +23,27 @@ const KERNEL_SEARCH_PATHS: &[(&str, &str)] = &[
     ("boot/vmlinuz", "boot/initrd.img"),
 ];
 
-/// ISO dosyasını Windows'a monte eder, sürücü harfini döndürür.
+const SQUASHFS_SEARCH_PATHS: &[&str] = &[
+    "live/filesystem.squashfs",
+    "casper/filesystem.squashfs",
+    "LiveOS/squashfs.img",
+    "arch/x86_64/airootfs.sfs",
+];
+
 pub fn mount_iso(iso_path: &str) -> Result<String, InstallerError> {
     if !std::path::Path::new(iso_path).exists() {
         return Err(InstallerError::InvalidInput(format!(
-            "ISO dosyası bulunamadı: {}",
+            "ISO file not found: {}",
             iso_path
         )));
     }
 
     if !iso_path.to_lowercase().ends_with(".iso") {
         return Err(InstallerError::InvalidInput(
-            "Seçilen dosya bir ISO dosyası değil.".into(),
+            "Selected file is not an ISO".into(),
         ));
     }
 
-    // Önceden monte edilmişse kaldır
     let _ = unmount_iso(iso_path);
 
     let script = format!(
@@ -48,28 +52,24 @@ pub fn mount_iso(iso_path: &str) -> Result<String, InstallerError> {
         Start-Sleep -Milliseconds 1500
         $vol = $img | Get-Volume -ErrorAction Stop
         if ($vol.DriveLetter) {{ $vol.DriveLetter }}
-        else {{ throw "ISO monte edildi ancak sürücü harfi atanamadı." }}
+        else {{ throw "ISO mounted but no drive letter assigned" }}
         "#,
         iso_path.replace('\'', "''")
     );
 
-    let output = run_powershell(&script).map_err(|e| {
-        InstallerError::IsoExtraction(format!("ISO monte edilemedi: {}", e))
-    })?;
+    let output = run_powershell(&script)
+        .map_err(|e| InstallerError::IsoExtraction(format!("ISO mount failed: {}", e)))?;
 
     let letter = output.trim().to_string();
     if letter.len() != 1 || !letter.chars().next().unwrap_or(' ').is_ascii_alphabetic() {
         return Err(InstallerError::IsoExtraction(format!(
-            "Geçerli sürücü harfi alınamadı: '{}'",
+            "Invalid ISO drive letter: '{}'",
             letter
         )));
     }
-
-    println!("[ISO] Monte edildi: {} -> {}:\\", iso_path, letter);
     Ok(letter)
 }
 
-/// ISO'yu demonte eder.
 pub fn unmount_iso(iso_path: &str) -> Result<(), InstallerError> {
     let script = format!(
         "Dismount-DiskImage -ImagePath '{}' -ErrorAction SilentlyContinue",
@@ -79,60 +79,78 @@ pub fn unmount_iso(iso_path: &str) -> Result<(), InstallerError> {
     Ok(())
 }
 
-/// ISO dosyasını hedef bölüme `install.iso` olarak kopyalar.
-pub fn copy_iso_to_partition(iso_path: &str, target_letter: &str) -> Result<(), InstallerError> {
-    let dest = format!("{}:\\install.iso", target_letter);
-    println!("[ISO] Kopyalanıyor: {} -> {}", iso_path, dest);
-
-    std::fs::copy(iso_path, &dest).map_err(|e| {
-        InstallerError::IsoExtraction(format!("ISO kopyalanamadı: {}", e))
-    })?;
-
-    println!("[ISO] Kopyalama tamamlandı: {}", dest);
-    Ok(())
-}
-
-/// Monte edilmiş ISO içinde Linux çekirdek dosyalarını (vmlinuz/initrd) arar.
 pub fn find_linux_kernel(iso_drive_letter: &str) -> Result<LinuxKernelInfo, InstallerError> {
     let root = format!("{}:\\", iso_drive_letter);
     let root_path = std::path::Path::new(&root);
 
     for (kernel_rel, initrd_rel) in KERNEL_SEARCH_PATHS {
-        let kernel_path = root_path.join(kernel_rel);
-        let initrd_path = root_path.join(initrd_rel);
-
+        let kernel_path = root_path.join(kernel_rel.replace('/', "\\"));
+        let initrd_path = root_path.join(initrd_rel.replace('/', "\\"));
         if kernel_path.exists() && initrd_path.exists() {
-            println!("[ISO] Çekirdek bulundu: {}, {}", kernel_rel, initrd_rel);
             return Ok(LinuxKernelInfo {
                 kernel_path: kernel_rel.to_string(),
                 initrd_path: initrd_rel.to_string(),
             });
         }
     }
-
     search_kernel_recursive(root_path)
+}
+
+pub fn find_squashfs_path(iso_drive_letter: &str) -> Result<String, InstallerError> {
+    let root = format!("{}:\\", iso_drive_letter);
+    let root_path = std::path::Path::new(&root);
+
+    for candidate in SQUASHFS_SEARCH_PATHS {
+        if root_path.join(candidate.replace('/', "\\")).exists() {
+            return Ok((*candidate).to_string());
+        }
+    }
+    search_squashfs_recursive(root_path).ok_or_else(|| {
+        InstallerError::IsoExtraction(
+            "filesystem.squashfs not found inside ISO".into(),
+        )
+    })
 }
 
 fn search_kernel_recursive(root: &std::path::Path) -> Result<LinuxKernelInfo, InstallerError> {
     let mut vmlinuz: Option<String> = None;
     let mut initrd: Option<String> = None;
-
     scan_dir(root, root, &mut vmlinuz, &mut initrd, 0);
-
     match (vmlinuz, initrd) {
-        (Some(k), Some(i)) => {
-            println!("[ISO] Recursive arama ile bulundu: {}, {}", k, i);
-            Ok(LinuxKernelInfo {
-                kernel_path: k,
-                initrd_path: i,
-            })
-        }
+        (Some(k), Some(i)) => Ok(LinuxKernelInfo {
+            kernel_path: k,
+            initrd_path: i,
+        }),
         _ => Err(InstallerError::IsoExtraction(
-            "Linux çekirdek dosyaları (vmlinuz/initrd) ISO içinde bulunamadı. \
-             Geçerli bir Pardus/Debian tabanlı ISO seçtiğinizden emin olun."
-                .into(),
+            "Linux kernel (vmlinuz/initrd) not found inside ISO".into(),
         )),
     }
+}
+
+fn search_squashfs_recursive(root: &std::path::Path) -> Option<String> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, depth: u32) -> Option<String> {
+        if depth > 5 {
+            return None;
+        }
+        let entries = std::fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if path.is_file()
+                && (name.ends_with(".squashfs") || name == "airootfs.sfs" || name == "squashfs.img")
+            {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    return Some(rel.to_string_lossy().replace('\\', "/"));
+                }
+            } else if path.is_dir() {
+                if let Some(hit) = walk(&path, root, depth + 1) {
+                    return Some(hit);
+                }
+            }
+        }
+        None
+    }
+    walk(root, root, 0)
 }
 
 fn scan_dir(
@@ -142,19 +160,16 @@ fn scan_dir(
     initrd: &mut Option<String>,
     depth: u32,
 ) {
-    if depth > 4 || (vmlinuz.is_some() && initrd.is_some()) {
+    if depth > 5 || (vmlinuz.is_some() && initrd.is_some()) {
         return;
     }
-
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
-
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_lowercase();
-
         if path.is_file() {
             if name.starts_with("vmlinuz") && vmlinuz.is_none() {
                 if let Ok(rel) = path.strip_prefix(root) {
@@ -171,4 +186,19 @@ fn scan_dir(
             scan_dir(&path, root, vmlinuz, initrd, depth + 1);
         }
     }
+}
+
+pub fn copy_iso_file(iso_drive_letter: &str, rel_path: &str, dest: &std::path::Path) -> Result<(), InstallerError> {
+    let src = format!(
+        "{}:\\{}",
+        iso_drive_letter,
+        rel_path.replace('/', "\\")
+    );
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| InstallerError::Io(format!("dest parent create failed: {}", e)))?;
+    }
+    std::fs::copy(&src, dest)
+        .map_err(|e| InstallerError::Io(format!("file copy failed ({} -> {}): {}", src, dest.display(), e)))?;
+    Ok(())
 }

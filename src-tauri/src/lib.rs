@@ -1,14 +1,18 @@
 mod boot_ops;
 mod disk_ops;
 mod error;
+mod image_ops;
+mod initramfs_ops;
 mod iso_ops;
-mod preseed_ops;
+mod util;
 
 use crate::error::InstallerError;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 #[cfg(debug_assertions)]
 use tauri::Manager;
+
+const BYTES_PER_GB: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ProgressPayload {
@@ -17,262 +21,330 @@ struct ProgressPayload {
     message: String,
 }
 
-/// Yönetici yetkisi kontrolü.
 #[tauri::command]
 async fn check_admin() -> Result<bool, InstallerError> {
     disk_ops::check_admin_privileges()
 }
 
-/// Boot modunu tespit eder.
 #[tauri::command]
 async fn detect_boot_mode() -> Result<boot_ops::BootMode, InstallerError> {
     boot_ops::detect_boot_mode()
 }
 
-/// Eski boot kayıtlarını temizler.
 #[tauri::command]
 async fn cleanup_old_boot_entries() -> Result<Vec<String>, InstallerError> {
-    boot_ops::cleanup_old_boot_entries()
+    boot_ops::cleanup_nextos_firmware_entries()
 }
 
-/// Disk bölümlerini listeler.
 #[tauri::command]
-async fn get_disk_partitions() -> Result<Vec<disk_ops::PartitionInfo>, InstallerError> {
-    disk_ops::list_partitions()
+async fn list_host_partitions() -> Result<Vec<disk_ops::HostCandidate>, InstallerError> {
+    disk_ops::list_host_candidates()
 }
 
-/// ISO dosyasının boyutunu MB cinsinden döndürür.
 #[tauri::command]
 async fn get_iso_size_mb(path: String) -> Result<u64, InstallerError> {
     iso_ops::get_iso_size_mb(&path)
 }
 
-/// Kullanıcı girdisini doğrular.
 fn validate_user_input(
     user_name: &str,
     password: &str,
+    hostname: &str,
 ) -> Result<(), InstallerError> {
     if user_name.is_empty() {
-        return Err(InstallerError::InvalidInput(
-            "Kullanıcı adı boş olamaz.".into(),
-        ));
+        return Err(InstallerError::InvalidInput("Username cannot be empty.".into()));
     }
     if password.is_empty() {
-        return Err(InstallerError::InvalidInput("Şifre boş olamaz.".into()));
+        return Err(InstallerError::InvalidInput("Password cannot be empty.".into()));
     }
-    // Linux kullanıcı adı kuralları: küçük harfle başlamalı,
-    // sadece küçük harf, rakam, tire ve alt çizgi içerebilir
-    let valid_chars = user_name
+    if hostname.is_empty() {
+        return Err(InstallerError::InvalidInput("Hostname cannot be empty.".into()));
+    }
+    let valid_user = user_name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    let starts_ok = user_name
+    let starts_user_ok = user_name
         .chars()
         .next()
         .map(|c| c.is_ascii_lowercase())
         .unwrap_or(false);
-    if !valid_chars || !starts_ok {
+    if !valid_user || !starts_user_ok || user_name.len() > 32 {
         return Err(InstallerError::InvalidInput(
-            "Kullanıcı adı küçük harfle başlamalı, sadece küçük harf, rakam, tire ve alt çizgi içerebilir.".into(),
+            "Username must start with a lowercase letter and contain only lowercase letters, digits, '-' and '_'.".into(),
         ));
     }
-    if user_name.len() > 32 {
+    let valid_host = hostname
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    let starts_host_ok = hostname
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphanumeric())
+        .unwrap_or(false);
+    if !valid_host || !starts_host_ok || hostname.len() > 63 {
         return Err(InstallerError::InvalidInput(
-            "Kullanıcı adı 32 karakterden uzun olamaz.".into(),
+            "Hostname must contain only lowercase letters, digits, and '-'.".into(),
         ));
     }
     Ok(())
 }
 
-/// Tek komutla tüm kurulumu gerçekleştirir:
-/// disk hazırlama (dual partition), ISO kopyalama, preseed dosyaları,
-/// bootloader yapılandırma, otomatik yeniden başlatma.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn start_installation(
     app: tauri::AppHandle,
     iso_path: String,
-    disk_number: u32,
-    partition_number: u32,
-    part_letter: String,
-    shrink_gb: u32,
+    host_drive_letter: String,
+    root_disk_size_gb: u32,
     user_name: String,
     password: String,
+    hostname: String,
+    locale: String,
+    timezone: String,
 ) -> Result<(), InstallerError> {
-    // 1. Yönetici yetkisi kontrolü
-    emit_progress(&app, "check", 0, "Yönetici yetkileri kontrol ediliyor...");
+    emit(&app, "verify", 0, "Verifying environment");
 
     if !disk_ops::check_admin_privileges()? {
         return Err(InstallerError::PermissionDenied(
-            "Uygulamayı Yönetici (Administrator) olarak çalıştırın.".into(),
+            "Run the installer as Administrator.".into(),
         ));
     }
-
-    // 2. Boot modu kontrolü
-    emit_progress(&app, "check", 3, "Boot modu kontrol ediliyor...");
-
-    let boot_mode = boot_ops::detect_boot_mode()?;
-    if boot_mode == boot_ops::BootMode::LegacyBIOS {
+    if boot_ops::detect_boot_mode()? == boot_ops::BootMode::LegacyBIOS {
         return Err(InstallerError::BootloaderConfig(
-            "Legacy BIOS desteklenmiyor. Sistem UEFI modunda olmalı.".into(),
+            "Legacy BIOS is not supported. UEFI firmware required.".into(),
         ));
     }
+    validate_user_input(&user_name, &password, &hostname)?;
 
-    // 3. Kullanıcı bilgisi doğrulama
-    emit_progress(&app, "check", 5, "Kullanıcı bilgileri doğrulanıyor...");
-    validate_user_input(&user_name, &password)?;
+    if root_disk_size_gb < image_ops::MIN_ROOT_DISK_GB
+        || root_disk_size_gb > image_ops::MAX_ROOT_DISK_GB
+    {
+        return Err(InstallerError::InvalidInput(format!(
+            "root.disk size must be between {} and {} GB.",
+            image_ops::MIN_ROOT_DISK_GB,
+            image_ops::MAX_ROOT_DISK_GB
+        )));
+    }
 
-    // 4. ISO dosya boyutunu hesapla (disk matematiği için)
-    emit_progress(&app, "disk", 8, "ISO dosya boyutu hesaplanıyor...");
-    let iso_size_mb = iso_ops::get_iso_size_mb(&iso_path)?;
-    let shrink_mb: u64 = (shrink_gb as u64) * 1024;
-    let persistence_mb = iso_size_mb + 1024;
-
-    emit_progress(
-        &app,
-        "disk",
-        10,
-        &format!(
-            "Seçilen bölüm: {}:\\ — {} MB toplam, Persistence: {} MB (FAT32), Linux: {} MB",
-            part_letter,
-            shrink_mb,
-            persistence_mb,
-            shrink_mb.saturating_sub(persistence_mb + 50)
-        ),
-    );
-
-    // 5. Bölüm küçült + dual partition oluştur (önce Persistence FAT32, sonra Linux)
-    emit_progress(&app, "disk", 15, "Disk bölümleri oluşturuluyor (Persistence FAT32 + Linux)...");
-
-    let dual_part = disk_ops::shrink_and_create_dual_partitions(
-        disk_number,
-        partition_number,
-        shrink_mb,
-        iso_size_mb,
-    )?;
-
-    emit_progress(
-        &app,
-        "disk",
-        30,
-        &format!(
-            "Bölümler oluşturuldu: Persistence={}:\\ ({} MB FAT32), Linux=Bölüm {} ({} MB)",
-            dual_part.persistence_letter,
-            dual_part.persistence_mb,
-            dual_part.linux_partition_number,
-            dual_part.linux_mb
-        ),
-    );
-
-    // 6. Race Condition Koruması: Windows'un diski bağlaması için 5 saniye bekle
-    emit_progress(&app, "disk", 33, "Windows disk bağlama bekleniyor (5 saniye)...");
-    std::thread::sleep(std::time::Duration::from_secs(5));
-
-    // 7. ISO'yu monte et (çekirdek + GRUB EFI dosyaları için)
-    emit_progress(&app, "iso", 38, "ISO dosyası monte ediliyor...");
-
+    emit(&app, "iso", 8, "Mounting source ISO");
     let iso_drive = iso_ops::mount_iso(&iso_path)?;
-
-    // 8. Linux çekirdek dosyalarını bul
-    emit_progress(&app, "iso", 42, "Linux çekirdek dosyaları aranıyor...");
-
     let kernel_info = match iso_ops::find_linux_kernel(&iso_drive) {
-        Ok(ki) => ki,
+        Ok(k) => k,
+        Err(e) => {
+            let _ = iso_ops::unmount_iso(&iso_path);
+            return Err(e);
+        }
+    };
+    let squashfs_rel = match iso_ops::find_squashfs_path(&iso_drive) {
+        Ok(s) => s,
         Err(e) => {
             let _ = iso_ops::unmount_iso(&iso_path);
             return Err(e);
         }
     };
 
-    emit_progress(
+    let squashfs_bytes = image_ops::read_squashfs_size(&iso_drive, &squashfs_rel)?;
+    let root_disk_bytes: u64 = (root_disk_size_gb as u64) * BYTES_PER_GB;
+
+    emit(
         &app,
-        "iso",
-        45,
-        &format!("Çekirdek bulundu: {}", kernel_info.kernel_path),
+        "verify",
+        12,
+        &format!(
+            "Validating capacity on {}:\\ for {} GB root.disk + {} MB squashfs",
+            host_drive_letter,
+            root_disk_size_gb,
+            squashfs_bytes / (1024 * 1024)
+        ),
     );
 
-    // 9. ESP monte et + GRUB kur
-    emit_progress(&app, "boot", 48, "EFI System Partition monte ediliyor...");
-
-    let esp_letter = match boot_ops::mount_esp() {
-        Ok(l) => l,
-        Err(e) => {
-            let _ = iso_ops::unmount_iso(&iso_path);
-            return Err(e);
-        }
-    };
-
-    emit_progress(&app, "boot", 52, "GRUB bootloader kuruluyor...");
-
-    if let Err(e) = boot_ops::setup_grub_efi(&iso_drive, &esp_letter, &kernel_info) {
-        let _ = boot_ops::cleanup_esp(&esp_letter);
+    let layout = image_ops::build_layout(&host_drive_letter);
+    if let Err(e) = image_ops::validate_capacity(&host_drive_letter, root_disk_bytes, squashfs_bytes)
+    {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        return Err(e);
+    }
+    if let Err(e) = image_ops::ensure_host_dir(&layout) {
         let _ = iso_ops::unmount_iso(&iso_path);
         return Err(e);
     }
 
-    // 10. ISO'yu demonte et
+    emit(
+        &app,
+        "image",
+        22,
+        "Allocating raw root.disk (formatted in-flight on first boot)",
+    );
+    if let Err(e) = image_ops::create_preallocated_root_disk(&layout.root_disk, root_disk_bytes) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        return Err(e);
+    }
+
+    emit(&app, "image", 50, "Copying root payload (squashfs) to host");
+    if let Err(e) = image_ops::copy_squashfs_from_iso(&iso_drive, &squashfs_rel, &layout.squashfs) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        image_ops::remove_host_artifacts(&layout);
+        return Err(e);
+    }
+
+    emit(&app, "image", 62, "Writing provisioning configuration");
+    let host_serial = match image_ops::get_ntfs_volume_serial(&host_drive_letter) {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = iso_ops::unmount_iso(&iso_path);
+            image_ops::remove_host_artifacts(&layout);
+            return Err(e);
+        }
+    };
+    if let Err(e) = image_ops::write_provisioning_config(
+        &layout,
+        &user_name,
+        &password,
+        &hostname,
+        &locale,
+        &timezone,
+        &host_serial,
+    ) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        image_ops::remove_host_artifacts(&layout);
+        return Err(e);
+    }
+
+    emit(&app, "boot", 68, "Staging kernel and initrd");
+    let temp_build = std::env::temp_dir().join(format!(
+        "nextos-build-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    if let Err(e) = std::fs::create_dir_all(&temp_build) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        image_ops::remove_host_artifacts(&layout);
+        return Err(InstallerError::Io(format!("temp build dir: {}", e)));
+    }
+    let stock_kernel = temp_build.join("vmlinuz");
+    let stock_initrd = temp_build.join("initrd.stock");
+    if let Err(e) = iso_ops::copy_iso_file(&iso_drive, &kernel_info.kernel_path, &stock_kernel) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        image_ops::remove_host_artifacts(&layout);
+        let _ = std::fs::remove_dir_all(&temp_build);
+        return Err(e);
+    }
+    if let Err(e) = iso_ops::copy_iso_file(&iso_drive, &kernel_info.initrd_path, &stock_initrd) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        image_ops::remove_host_artifacts(&layout);
+        let _ = std::fs::remove_dir_all(&temp_build);
+        return Err(e);
+    }
+
+    emit(&app, "boot", 76, "Building NextOS overlay initrd (cpio)");
+    let overlay_gz = temp_build.join("overlay.cpio.gz");
+    if let Err(e) = initramfs_ops::build_overlay_cpio_gz(&overlay_gz) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        image_ops::remove_host_artifacts(&layout);
+        let _ = std::fs::remove_dir_all(&temp_build);
+        return Err(e);
+    }
+
+    emit(&app, "boot", 82, "Mounting EFI System Partition");
+    let esp_letter = match boot_ops::mount_esp() {
+        Ok(l) => l,
+        Err(e) => {
+            let _ = iso_ops::unmount_iso(&iso_path);
+            image_ops::remove_host_artifacts(&layout);
+            let _ = std::fs::remove_dir_all(&temp_build);
+            return Err(e);
+        }
+    };
+
+    if boot_ops::detect_secure_boot() {
+        emit(
+            &app,
+            "boot",
+            83,
+            "Secure Boot detected — copying full EFI shim chain for compatibility",
+        );
+    }
+
+    emit(&app, "boot", 86, "Placing EFI payload on ESP");
+    let efi_boot_path = match boot_ops::copy_efi_payload_from_iso(&iso_drive, &esp_letter) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = boot_ops::cleanup_esp_payload(&esp_letter);
+            let _ = iso_ops::unmount_iso(&iso_path);
+            image_ops::remove_host_artifacts(&layout);
+            let _ = std::fs::remove_dir_all(&temp_build);
+            return Err(e);
+        }
+    };
+
     let _ = iso_ops::unmount_iso(&iso_path);
 
-    // 11. ISO dosyasını Persistence bölümüne kopyala (FAT32)
-    emit_progress(
-        &app,
-        "iso",
-        58,
-        "ISO dosyası kopyalanıyor (bu birkaç dakika sürebilir)...",
-    );
-
-    if let Err(e) = iso_ops::copy_iso_to_partition(&iso_path, &dual_part.persistence_letter) {
-        let _ = boot_ops::cleanup_esp(&esp_letter);
+    emit(&app, "boot", 90, "Copying kernel, initrd and overlay to host volume");
+    if let Err(e) =
+        image_ops::place_boot_payload_on_host(&layout, &stock_kernel, &stock_initrd, &overlay_gz)
+    {
+        let _ = boot_ops::cleanup_esp_payload(&esp_letter);
+        image_ops::remove_host_artifacts(&layout);
+        let _ = std::fs::remove_dir_all(&temp_build);
         return Err(e);
     }
 
-    emit_progress(&app, "iso", 72, "ISO dosyası kopyalandı.");
-
-    // 12. persistence.conf yaz (CRLF→LF koruması)
-    emit_progress(&app, "boot", 75, "persistence.conf yazılıyor...");
-    let persistence_conf = preseed_ops::generate_persistence_conf();
-    let persistence_conf_path = format!(
-        "{}:\\persistence.conf",
-        dual_part.persistence_letter
-    );
-    preseed_ops::write_linux_file(&persistence_conf_path, &persistence_conf)?;
-
-    // 13. install-hook.sh yaz (CRLF→LF koruması, kullanıcı bilgileri ile)
-    emit_progress(&app, "boot", 78, "install-hook.sh yazılıyor (kullanıcı oluşturma betiği)...");
-    let install_hook = preseed_ops::generate_install_hook(&user_name, &password);
-    let install_hook_path = format!(
-        "{}:\\install-hook.sh",
-        dual_part.persistence_letter
-    );
-    preseed_ops::write_linux_file(&install_hook_path, &install_hook)?;
-
-    // 14. Data bölümüne grub.cfg yaz (CRLF→LF koruması)
-    emit_progress(&app, "boot", 82, "Data bölümüne GRUB yapılandırması yazılıyor...");
-    let _ = boot_ops::write_grub_cfg_to_data_partition(&dual_part.persistence_letter, &kernel_info);
-
-    // 15. BCD yapılandırması
-    emit_progress(&app, "boot", 88, "Windows Boot Manager yapılandırılıyor...");
-
-    if let Err(e) = boot_ops::create_bcd_entry(&esp_letter) {
-        let _ = boot_ops::cleanup_esp(&esp_letter);
+    let grub_cfg = boot_ops::generate_loop_grub_cfg(&host_serial);
+    if let Err(e) = boot_ops::write_grub_cfg(&esp_letter, &grub_cfg) {
+        let _ = boot_ops::cleanup_esp_payload(&esp_letter);
+        image_ops::remove_host_artifacts(&layout);
+        let _ = std::fs::remove_dir_all(&temp_build);
         return Err(e);
     }
 
-    emit_progress(&app, "boot", 95, "Bootloader yapılandırması tamamlandı.");
+    emit(&app, "boot", 94, "Registering UEFI boot entry");
+    let nextos_guid = match boot_ops::register_firmware_entry(&esp_letter, &efi_boot_path) {
+        Ok(g) => g,
+        Err(e) => {
+            let _ = boot_ops::cleanup_esp_payload(&esp_letter);
+            image_ops::remove_host_artifacts(&layout);
+            let _ = std::fs::remove_dir_all(&temp_build);
+            return Err(e);
+        }
+    };
 
-    // 16. Otomatik yeniden başlatma
-    emit_progress(
-        &app,
-        "reboot",
-        100,
-        "Sistem yeniden başlatılıyor...",
-    );
+    let _ = std::fs::remove_dir_all(&temp_build);
 
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    boot_ops::reboot_system()?;
+    // Store the BCD GUID so reboot_now can set the one-time BootNext override
+    // Use a small temp file; it's cleaned up after reboot anyway.
+    let guid_file = std::env::temp_dir().join("nextos_boot_guid.txt");
+    let _ = std::fs::write(&guid_file, &nextos_guid);
 
+    emit(&app, "done", 100, "Installation complete. Reboot to launch NextOS.");
     Ok(())
 }
 
-fn emit_progress(app: &tauri::AppHandle, step: &str, progress: u32, message: &str) {
+#[tauri::command]
+async fn uninstall_nextos(host_drive_letter: String) -> Result<(), InstallerError> {
+    if !disk_ops::check_admin_privileges()? {
+        return Err(InstallerError::PermissionDenied(
+            "Run as Administrator to uninstall.".into(),
+        ));
+    }
+    let _ = boot_ops::cleanup_nextos_firmware_entries();
+    if let Ok(esp_letter) = boot_ops::mount_esp() {
+        let _ = boot_ops::cleanup_esp_payload(&esp_letter);
+    }
+    let layout = image_ops::build_layout(&host_drive_letter);
+    image_ops::remove_host_artifacts(&layout);
+    Ok(())
+}
+
+#[tauri::command]
+async fn reboot_now() -> Result<(), InstallerError> {
+    let guid_path = std::env::temp_dir().join("nextos_boot_guid.txt");
+    let guid = std::fs::read_to_string(&guid_path).unwrap_or_default();
+    boot_ops::reboot_system(guid.trim())
+}
+
+fn emit(app: &tauri::AppHandle, step: &str, progress: u32, message: &str) {
     let _ = app.emit(
         "installation-progress",
         ProgressPayload {
@@ -299,11 +371,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_admin,
             detect_boot_mode,
-            start_installation,
-            cleanup_old_boot_entries,
-            get_disk_partitions,
+            list_host_partitions,
             get_iso_size_mb,
+            cleanup_old_boot_entries,
+            start_installation,
+            uninstall_nextos,
+            reboot_now,
         ])
         .run(tauri::generate_context!())
-        .expect("Uygulama başlatılamadı!");
+        .expect("Failed to launch application");
 }

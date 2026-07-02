@@ -1,0 +1,404 @@
+#!/bin/sh
+# NextOS custom initramfs /init
+# Loaded by GRUB as a SECOND initrd after the stock Pardus/Debian live
+# initrd; the kernel extracts the archives in order, so this file replaces
+# live-boot's /init.
+# Handles: module loading, NTFS host discovery, loop-mount, first-boot
+# rootfs extraction, and switch_root into the persistent ext4 root.disk.
+#
+# IMPORTANT: on first boot every tool used here comes from the STOCK ISO
+# initrd (mostly busybox applets). Everything below must therefore stick to
+# busybox-compatible invocations, with util-linux syntax only as an optional
+# fast path.
+
+export PATH=/usr/bin:/usr/sbin:/bin:/sbin:/usr/local/bin
+
+# ── Create essential directories ─────────────────────────────────────────────
+# Some minimal initramfs builds do not include these as pre-created dirs.
+mkdir -p /proc /sys /dev /run /tmp /host /newroot /mnt
+
+# ── Basic mount points ────────────────────────────────────────────────────────
+# Use the simplest possible form — extra options can fail on some kernels.
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys     2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev     2>/dev/null || \
+mount -t tmpfs    tmpfs    /dev     2>/dev/null || true
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs  tmpfs  /dev/shm 2>/dev/null || true
+mount -t tmpfs  tmpfs  /run     2>/dev/null || true
+
+# Start udev so block devices appear before we probe them
+if [ -x /lib/systemd/systemd-udevd ]; then
+    /lib/systemd/systemd-udevd --daemon 2>/dev/null || true
+elif [ -x /sbin/udevd ]; then
+    /sbin/udevd --daemon 2>/dev/null || true
+fi
+udevadm trigger 2>/dev/null || true
+udevadm settle --timeout=5 2>/dev/null || true
+
+# ── Parse kernel cmdline ──────────────────────────────────────────────────────
+NEXTOS_HOST_SERIAL=""
+NEXTOS_ROOT_DISK_PATH="/NextOS/root.disk"
+NEXTOS_SQUASHFS_PATH="/NextOS/filesystem.squashfs"
+for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in
+        nextos_host_serial=*) NEXTOS_HOST_SERIAL="${arg#nextos_host_serial=}" ;;
+        nextos_root_disk=*)   NEXTOS_ROOT_DISK_PATH="${arg#nextos_root_disk=}" ;;
+        nextos_squashfs=*)    NEXTOS_SQUASHFS_PATH="${arg#nextos_squashfs=}" ;;
+    esac
+done
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+log()   { echo "[nextos] $*"; }
+fatal() {
+    echo ""
+    echo "[nextos] FATAL: $*"
+    echo "[nextos] Dropping to emergency shell — type 'exit' to reboot"
+    /bin/sh
+    echo b > /proc/sysrq-trigger
+}
+
+# Verify /proc is usable — without it we cannot read the kernel cmdline
+if [ ! -r /proc/cmdline ]; then
+    echo "[nextos] /proc/cmdline not readable — proc mount may have failed"
+    echo "[nextos] Retrying proc mount..."
+    mount -t proc none /proc 2>/dev/null || \
+    mount -t proc proc  /proc 2>/dev/null || true
+fi
+if [ ! -r /proc/cmdline ]; then
+    fatal "/proc is not mounted and retries failed"
+fi
+
+log "boot serial=$NEXTOS_HOST_SERIAL root.disk=$NEXTOS_ROOT_DISK_PATH"
+
+# ── Kernel modules ────────────────────────────────────────────────────────────
+# Storage controllers — must be loaded before disks appear in /proc/partitions
+modprobe sd_mod      2>/dev/null || true  # SCSI disk (sda/sdb/…)
+modprobe sr_mod      2>/dev/null || true  # SCSI CD-ROM
+modprobe ahci        2>/dev/null || true  # SATA AHCI
+modprobe libahci     2>/dev/null || true
+modprobe ata_piix    2>/dev/null || true  # VirtualBox IDE/SATA
+modprobe nvme        2>/dev/null || true  # NVMe
+modprobe virtio_blk  2>/dev/null || true  # VirtIO block
+modprobe virtio_scsi 2>/dev/null || true  # VirtIO SCSI
+modprobe scsi_mod    2>/dev/null || true
+# Filesystem drivers
+modprobe loop        2>/dev/null || true
+modprobe ext4        2>/dev/null || true
+modprobe squashfs    2>/dev/null || true
+modprobe ntfs3       2>/dev/null || true
+modprobe ntfs        2>/dev/null || true
+modprobe fuse        2>/dev/null || true
+# Let udev settle after loading storage modules so device nodes appear
+udevadm trigger --subsystem-match=block 2>/dev/null || true
+udevadm settle  --timeout=10            2>/dev/null || true
+
+# Early sanity check: at least one NTFS-capable driver must be present
+if ! grep -qE 'ntfs' /proc/filesystems 2>/dev/null \
+    && ! command -v ntfs-3g >/dev/null 2>&1; then
+    log "WARNING: no NTFS driver found (ntfs3/ntfs missing in /proc/filesystems, no ntfs-3g)"
+    log "the stock ISO initrd likely lacks ntfs3.ko — host discovery will fail"
+fi
+
+# ── NTFS mount helpers ────────────────────────────────────────────────────────
+NTFS_OPTS="uid=0,gid=0,umask=0022,noatime"
+NEXTOS_DIR_PATH=$(dirname "$NEXTOS_ROOT_DISK_PATH")
+
+probe_mount_ro() {
+    # $1 = device, $2 = mountpoint.  Read-only probe with every NTFS driver.
+    # Probing is read-only on purpose: we touch other people's Windows
+    # volumes here and must never write to a hibernated/dirty NTFS.
+    mount -t ntfs3 -o "ro,$NTFS_OPTS"       "$1" "$2" 2>/dev/null && return 0
+    mount -t ntfs3 -o "ro,force,$NTFS_OPTS" "$1" "$2" 2>/dev/null && return 0
+    mount -t ntfs  -o "ro,$NTFS_OPTS"       "$1" "$2" 2>/dev/null && return 0
+    if command -v ntfs-3g >/dev/null 2>&1; then
+        ntfs-3g -o "ro,$NTFS_OPTS" "$1" "$2" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+host_write_ok() {
+    # $1 = mountpoint.  Verify we can actually create files on the host.
+    _t="$1$NEXTOS_DIR_PATH/.nextos-write-test"
+    if touch "$_t" 2>/dev/null; then
+        rm -f "$_t" 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
+mount_host_rw() {
+    # $1 = device, $2 = mountpoint.  Mount read-write and verify writability
+    # (the legacy in-kernel ntfs driver mounts "rw" but cannot create files).
+    if mount -t ntfs3 -o "rw,$NTFS_OPTS" "$1" "$2" 2>/dev/null \
+        || mount -t ntfs3 -o "rw,force,$NTFS_OPTS" "$1" "$2" 2>/dev/null; then
+        host_write_ok "$2" && return 0
+        umount "$2" 2>/dev/null || true
+    fi
+    if command -v ntfs-3g >/dev/null 2>&1; then
+        if ntfs-3g -o "rw,$NTFS_OPTS" "$1" "$2" 2>/dev/null; then
+            host_write_ok "$2" && return 0
+            umount "$2" 2>/dev/null || true
+        fi
+    fi
+    return 1
+}
+
+# ── Locate host NTFS volume by marker file ───────────────────────────────────
+# We do NOT match by serial: Windows reports a 32-bit volume serial while blkid
+# reports NTFS's 64-bit serial, so they never compare equal.  Instead we mount
+# each NTFS candidate read-only and look for the NextOS payload (root.disk).
+PROBE="/tmp/nextos-probe"
+mkdir -p /host "$PROBE"
+HOST_DEV=""
+
+log "scanning partitions for NextOS payload (up to 20s)..."
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    udevadm settle --timeout=2 2>/dev/null || true
+
+    # Build a candidate list from /dev/* device nodes AND /proc/partitions
+    # to cover both cases: udev-populated /dev and raw kernel registration.
+    CANDIDATES=""
+    for dev in /dev/sd* /dev/nvme* /dev/vd* /dev/mmcblk* /dev/hd*; do
+        [ -b "$dev" ] && CANDIDATES="$CANDIDATES $dev"
+    done
+    # Also derive candidates from /proc/partitions for devices udev hasn't
+    # created nodes for yet (create them with mknod if missing)
+    while IFS= read -r line; do
+        maj=$(echo "$line" | awk '{print $1}')
+        min=$(echo "$line" | awk '{print $2}')
+        dname=$(echo "$line" | awk '{print $4}')
+        [ -z "$dname" ] && continue
+        [ "$dname" = "name" ] && continue
+        dev="/dev/$dname"
+        if [ ! -b "$dev" ] && [ -n "$maj" ] && [ -n "$min" ]; then
+            mknod "$dev" b "$maj" "$min" 2>/dev/null || true
+        fi
+        case "$dname" in
+            sd*|nvme*|vd*|mmcblk*|hd*) CANDIDATES="$CANDIDATES $dev" ;;
+        esac
+    done < /proc/partitions
+
+    for dev in $CANDIDATES; do
+        # Attempt a read-only NTFS mount. Non-NTFS volumes (ESP/vfat, ext4,
+        # raw disks) fail instantly, so we don't need a reliable blkid here.
+        if probe_mount_ro "$dev" "$PROBE"; then
+            if [ -f "$PROBE$NEXTOS_ROOT_DISK_PATH" ]; then
+                umount "$PROBE" 2>/dev/null || true
+                HOST_DEV="$dev"
+                break
+            fi
+            umount "$PROBE" 2>/dev/null || true
+        fi
+    done
+
+    [ -n "$HOST_DEV" ] && break
+    log "scan attempt $attempt/20..."
+    sleep 1
+done
+
+rmdir "$PROBE" 2>/dev/null || true
+
+if [ -z "$HOST_DEV" ]; then
+    log "no NTFS partition with $NEXTOS_ROOT_DISK_PATH found."
+    log "--- diagnostics ---"
+    log "kernel supports these filesystems:"
+    cat /proc/filesystems 2>/dev/null | grep -E 'ntfs|ext4|squash|fuse' || true
+    log "ntfs3 in /proc/filesystems above? if not, the stock initrd lacks ntfs3.ko"
+    log "block devices:"
+    cat /proc/partitions 2>/dev/null || true
+    log "blkid:"
+    blkid 2>/dev/null || true
+    fatal "host volume containing $NEXTOS_ROOT_DISK_PATH not found"
+fi
+
+# ── Mount host NTFS read-write ────────────────────────────────────────────────
+log "mounting host $HOST_DEV → /host (read-write)"
+mount_host_rw "$HOST_DEV" /host \
+    || fatal "NTFS rw mount failed — disable Windows Fast Startup / hibernation, boot Windows once, shut down cleanly and retry"
+
+# ── Attach root.disk as loop device ──────────────────────────────────────────
+DISK="/host${NEXTOS_ROOT_DISK_PATH}"
+[ -f "$DISK" ] || fatal "root.disk not found at $DISK"
+
+log "attaching $DISK as loop device"
+# Ensure /dev/loop-control and /dev/loop0-7 exist (udev may not have created them yet)
+if [ ! -e /dev/loop-control ]; then
+    mknod /dev/loop-control c 10 237 2>/dev/null || true
+fi
+for _li in 0 1 2 3 4 5 6 7; do
+    [ -e "/dev/loop${_li}" ] || mknod "/dev/loop${_li}" b 7 "${_li}" 2>/dev/null || true
+done
+
+attach_loop() {
+    # $1 = image file. Prints the attached loop device on success.
+    # util-linux syntax first; busybox losetup does not understand
+    # --find/--show, so fall back to attaching an explicit /dev/loopN.
+    _dev=$(losetup --find --show "$1" 2>/dev/null) || _dev=""
+    if [ -n "$_dev" ] && [ -b "$_dev" ]; then
+        echo "$_dev"
+        return 0
+    fi
+    for _i in 0 1 2 3 4 5 6 7; do
+        _d="/dev/loop${_i}"
+        [ -b "$_d" ] || continue
+        if losetup "$_d" "$1" 2>/dev/null; then
+            echo "$_d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+LOOPDEV=""
+for _try in 1 2 3 4 5; do
+    LOOPDEV=$(attach_loop "$DISK" || true)
+    [ -n "$LOOPDEV" ] && break
+    log "losetup retry $_try/5 ..."
+    sleep 1
+done
+[ -n "$LOOPDEV" ] || fatal "losetup failed for $DISK"
+log "loop device: $LOOPDEV"
+
+# ── First boot: format root.disk with ext4 ───────────────────────────────────
+# The format decision is driven by a marker file on the host — NOT by blkid.
+# A freshly allocated (unzeroed) root.disk can therefore never be mistaken
+# for formatted, and an already-populated root.disk can never be
+# destructively reformatted because of a flaky filesystem probe.
+FORMAT_MARKER="/host$NEXTOS_DIR_PATH/.nextos-formatted"
+if [ ! -f "$FORMAT_MARKER" ]; then
+    log "first boot — formatting root.disk ext4 in-flight (~60s, please wait)"
+    SQUASH="/host${NEXTOS_SQUASHFS_PATH}"
+    [ -f "$SQUASH" ] || fatal "squashfs not found at $SQUASH for in-flight mkfs"
+
+    MFSTMP="/tmp/nextos-mkfs"
+    mkdir -p "$MFSTMP"
+    mount -t squashfs -o loop,ro "$SQUASH" "$MFSTMP" \
+        || fatal "squashfs mount for mkfs failed"
+
+    mkdir -p "$MFSTMP/dev" "$MFSTMP/proc" "$MFSTMP/sys" 2>/dev/null || true
+    mount --bind /dev  "$MFSTMP/dev"
+    mount --bind /proc "$MFSTMP/proc"
+    mount --bind /sys  "$MFSTMP/sys"
+
+    # mkfs.ext4 is not in the initrd — run the one inside the squashfs.
+    # nodiscard: the loop device sits on an NTFS-backed file that rejects
+    # WRITE_ZEROES/discard, so letting mkfs try floods dmesg with
+    # "operation not supported" errors and slows the format massively.
+    MKFS_OPTS="-F -L NEXTOS_ROOT -E nodiscard,lazy_itable_init=1,lazy_journal_init=1"
+    MKFS_RC=1
+    if chroot "$MFSTMP" /sbin/mkfs.ext4 $MKFS_OPTS "$LOOPDEV"; then
+        MKFS_RC=0
+    elif chroot "$MFSTMP" /usr/sbin/mkfs.ext4 $MKFS_OPTS "$LOOPDEV"; then
+        MKFS_RC=0
+    fi
+
+    umount "$MFSTMP/sys"  2>/dev/null || true
+    umount "$MFSTMP/proc" 2>/dev/null || true
+    umount "$MFSTMP/dev"  2>/dev/null || true
+    umount "$MFSTMP"      2>/dev/null || true
+    rmdir  "$MFSTMP"      2>/dev/null || true
+
+    [ "$MKFS_RC" -eq 0 ] || fatal "mkfs.ext4 failed (rc=$MKFS_RC)"
+    touch "$FORMAT_MARKER" 2>/dev/null || true
+    log "ext4 format complete"
+fi
+
+# ── Mount root.disk ───────────────────────────────────────────────────────────
+mkdir -p /newroot
+log "mounting $LOOPDEV (ext4) → /newroot"
+mount -t ext4 -o rw,noatime,errors=remount-ro "$LOOPDEV" /newroot \
+    || fatal "ext4 mount of loop device failed"
+
+# ── First boot: bootstrap rootfs from squashfs ───────────────────────────────
+if [ ! -f "/newroot/.nextos-bootstrapped" ]; then
+    log "first boot — extracting rootfs from squashfs (5–15 min, please wait)"
+    SQUASH="/host${NEXTOS_SQUASHFS_PATH}"
+    [ -f "$SQUASH" ] || fatal "squashfs not found at $SQUASH for bootstrap"
+
+    SQTMP="/tmp/nextos-squash-src"
+    mkdir -p "$SQTMP"
+    mount -t squashfs -o loop,ro "$SQUASH" "$SQTMP" \
+        || fatal "squashfs mount for bootstrap failed"
+
+    cp -a "$SQTMP/." /newroot/
+    umount "$SQTMP" 2>/dev/null || true
+    rmdir  "$SQTMP" 2>/dev/null || true
+    log "rootfs extraction complete"
+
+    # Stage provisioning config
+    mkdir -p /newroot/var/lib/nextos
+    if [ -f "/host$NEXTOS_DIR_PATH/nextos.conf" ]; then
+        cp "/host$NEXTOS_DIR_PATH/nextos.conf" /newroot/var/lib/nextos/nextos.conf
+        chmod 600 /newroot/var/lib/nextos/nextos.conf
+    fi
+
+    # Stage nextos-firstboot from initramfs overlay
+    if [ -f "/usr/local/sbin/nextos-firstboot" ]; then
+        mkdir -p /newroot/usr/local/sbin
+        cp /usr/local/sbin/nextos-firstboot /newroot/usr/local/sbin/nextos-firstboot
+        chmod 0755 /newroot/usr/local/sbin/nextos-firstboot
+    fi
+
+    # Save custom /init so nextos-firstboot can embed it into every
+    # future update-initramfs run via an initramfs-tools hook.
+    cp /init /newroot/usr/local/sbin/nextos-init
+    chmod 0755 /newroot/usr/local/sbin/nextos-init
+
+    # Install systemd firstboot unit
+    mkdir -p /newroot/etc/systemd/system \
+             /newroot/etc/systemd/system/multi-user.target.wants
+    cat > /newroot/etc/systemd/system/nextos-firstboot.service <<'UNIT'
+[Unit]
+Description=NextOS First Boot Provisioning
+ConditionPathExists=!/var/lib/nextos/firstboot-complete
+After=local-fs.target
+Before=display-manager.service getty.target multi-user.target
+Conflicts=live-config.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nextos-firstboot
+RemainAfterExit=true
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    ln -sf /etc/systemd/system/nextos-firstboot.service \
+        /newroot/etc/systemd/system/multi-user.target.wants/nextos-firstboot.service
+
+    # Neutralise live-boot leftovers BEFORE the first systemd start:
+    # the live image's /etc/fstab can drop systemd-remount-fs into emergency
+    # mode, and live-config would fight nextos-firstboot over users/autologin.
+    cat > /newroot/etc/fstab <<FSTAB
+$LOOPDEV  /  ext4  defaults,noatime,errors=remount-ro  0  1
+FSTAB
+    for _svc in live-config.service live-config-systemd.service live-tools.service; do
+        ln -sf /dev/null "/newroot/etc/systemd/system/$_svc" 2>/dev/null || true
+    done
+    # Force a fresh machine-id for this installation (live images ship a
+    # shared one); systemd regenerates it on first boot.
+    : > /newroot/etc/machine-id 2>/dev/null || true
+
+    touch /newroot/.nextos-bootstrapped
+    log "bootstrap staging complete"
+fi
+
+# ── Make /host accessible from new root ──────────────────────────────────────
+mkdir -p /newroot/host
+mount --bind /host /newroot/host 2>/dev/null || true
+
+# ── Move core filesystems into new root ──────────────────────────────────────
+for fs in proc sys dev run; do
+    mkdir -p "/newroot/$fs"
+    mount --move "/$fs" "/newroot/$fs" 2>/dev/null \
+        || mount --bind "/$fs" "/newroot/$fs" 2>/dev/null \
+        || true
+done
+
+# ── Switch root ───────────────────────────────────────────────────────────────
+log "switch_root → /sbin/init"
+exec switch_root /newroot /sbin/init

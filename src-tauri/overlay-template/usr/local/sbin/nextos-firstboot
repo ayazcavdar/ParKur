@@ -1,0 +1,320 @@
+#!/bin/bash
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export DEBIAN_FRONTEND=noninteractive
+
+CONF=/var/lib/nextos/nextos.conf
+COMPLETE=/var/lib/nextos/firstboot-complete
+HOOK_SRC=/var/lib/nextos/nextos-loop.hook
+LOG=/var/log/nextos-firstboot.log
+
+mkdir -p /var/log
+exec > >(tee -a "$LOG") 2>&1
+
+if [ -f "$COMPLETE" ]; then
+    exit 0
+fi
+
+if [ ! -f "$CONF" ]; then
+    echo "nextos-firstboot: provisioning config missing"
+    exit 1
+fi
+
+. "$CONF"
+
+NEXTOS_USERNAME="${NEXTOS_USERNAME:-nextos}"
+NEXTOS_PASSWORD="${NEXTOS_PASSWORD:-nextos}"
+NEXTOS_HOSTNAME="${NEXTOS_HOSTNAME:-nextos}"
+NEXTOS_LOCALE="${NEXTOS_LOCALE:-en_US.UTF-8}"
+NEXTOS_TIMEZONE="${NEXTOS_TIMEZONE:-UTC}"
+NEXTOS_ROOT_DISK_PATH="${NEXTOS_ROOT_DISK_PATH:-/NextOS/root.disk}"
+NEXTOS_HOST_SERIAL="${NEXTOS_HOST_SERIAL:-}"
+
+# Strip live-installer shortcuts from /etc/skel BEFORE creating the user,
+# otherwise useradd -m copies them straight onto the new user's Desktop
+# (this is where the "Install Pardus" icon came from).
+for _skeldir in /etc/skel/Desktop /etc/skel/.config/autostart; do
+    [ -d "$_skeldir" ] || continue
+    find "$_skeldir" -maxdepth 1 -iname '*calamares*' -delete 2>/dev/null || true
+    find "$_skeldir" -maxdepth 1 -iname '*install*'   -delete 2>/dev/null || true
+done
+
+echo "[nextos-firstboot] creating user $NEXTOS_USERNAME"
+if ! id "$NEXTOS_USERNAME" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -c "$NEXTOS_USERNAME" "$NEXTOS_USERNAME"
+fi
+echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD" | chpasswd
+usermod -aG sudo "$NEXTOS_USERNAME" 2>/dev/null || true
+usermod -aG adm,audio,video,plugdev,netdev,bluetooth "$NEXTOS_USERNAME" 2>/dev/null || true
+
+echo "[nextos-firstboot] hostname $NEXTOS_HOSTNAME"
+echo "$NEXTOS_HOSTNAME" > /etc/hostname
+hostnamectl set-hostname "$NEXTOS_HOSTNAME" 2>/dev/null || true
+sed -i '/^127\.0\.1\.1/d' /etc/hosts
+echo "127.0.1.1  $NEXTOS_HOSTNAME" >> /etc/hosts
+
+echo "[nextos-firstboot] timezone $NEXTOS_TIMEZONE"
+if [ -f "/usr/share/zoneinfo/$NEXTOS_TIMEZONE" ]; then
+    ln -sf "/usr/share/zoneinfo/$NEXTOS_TIMEZONE" /etc/localtime
+    echo "$NEXTOS_TIMEZONE" > /etc/timezone
+fi
+
+echo "[nextos-firstboot] locale $NEXTOS_LOCALE"
+if [ -f /etc/locale.gen ]; then
+    sed -i "s/^# *\(${NEXTOS_LOCALE//./\\.}\)/\1/" /etc/locale.gen || true
+    locale-gen "$NEXTOS_LOCALE" 2>/dev/null || true
+    update-locale LANG="$NEXTOS_LOCALE" 2>/dev/null || true
+fi
+
+# Keyboard layout derived from the locale (no extra user input needed).
+case "$NEXTOS_LOCALE" in
+    tr_*) KB_LAYOUT="tr" ;;
+    de_*) KB_LAYOUT="de" ;;
+    fr_*) KB_LAYOUT="fr" ;;
+    es_*) KB_LAYOUT="es" ;;
+    ru_*) KB_LAYOUT="ru" ;;
+    ja_*) KB_LAYOUT="jp" ;;
+    en_GB*) KB_LAYOUT="gb" ;;
+    *)    KB_LAYOUT="us" ;;
+esac
+echo "[nextos-firstboot] keyboard layout $KB_LAYOUT"
+cat > /etc/default/keyboard <<KBD
+XKBMODEL="pc105"
+XKBLAYOUT="$KB_LAYOUT"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+KBD
+dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
+setupcon --save 2>/dev/null || true
+
+echo "[nextos-firstboot] purging live + installer packages"
+LIVE_PKGS="live-boot live-boot-doc live-boot-initramfs-tools live-config live-config-systemd live-config-doc live-tools casper user-setup"
+# The OS installer (Calamares) ships on the live image and puts the
+# "Install Pardus" shortcut on the desktop — this system is already
+# installed by NextOS, so the installer must go.
+INSTALLER_PKGS="calamares calamares-settings-debian calamares-settings-pardus pardus-installer live-installer"
+apt-get -y --no-download purge $LIVE_PKGS $INSTALLER_PKGS 2>/dev/null || true
+for pkg in $LIVE_PKGS $INSTALLER_PKGS; do
+    if dpkg -l "$pkg" 2>/dev/null | grep -q '^ii'; then
+        dpkg --purge --force-all "$pkg" 2>/dev/null || true
+    fi
+done
+apt-get -y --no-download autoremove --purge 2>/dev/null || true
+
+# Remove any leftover installer shortcuts from every user's desktop and
+# autostart (covers shortcuts already copied from /etc/skel by useradd).
+for _desk in /root /home/*; do
+    [ -d "$_desk" ] || continue
+    for _sub in Desktop Masaüstü .config/autostart; do
+        [ -d "$_desk/$_sub" ] || continue
+        find "$_desk/$_sub" -maxdepth 1 -iname '*calamares*' -delete 2>/dev/null || true
+        find "$_desk/$_sub" -maxdepth 1 -iname '*install*'   -delete 2>/dev/null || true
+    done
+done
+rm -f /usr/share/applications/calamares.desktop \
+      /usr/share/applications/*install-debian*.desktop \
+      /usr/share/applications/*pardus-installer*.desktop 2>/dev/null || true
+
+systemctl mask live-config.service 2>/dev/null || true
+systemctl mask live-config-systemd.service 2>/dev/null || true
+systemctl mask live-tools.service 2>/dev/null || true
+
+rm -f /etc/sudoers.d/live /etc/sudoers.d/live-config /etc/sudoers.d/user /etc/sudoers.d/90-live
+for u in user live casper; do
+    if [ "$u" != "$NEXTOS_USERNAME" ] && id "$u" >/dev/null 2>&1; then
+        pkill -KILL -u "$u" 2>/dev/null || true
+        userdel -r -f "$u" 2>/dev/null || true
+    fi
+done
+
+echo "[nextos-firstboot] installing persistent initramfs hooks"
+install -d -m 0755 /etc/initramfs-tools/scripts/local-top
+install -d -m 0755 /etc/initramfs-tools/scripts/init-bottom
+install -d -m 0755 /etc/initramfs-tools/hooks
+
+if [ -f "$HOOK_SRC" ]; then
+    install -m 0755 "$HOOK_SRC" /etc/initramfs-tools/scripts/local-top/nextos-loop
+fi
+
+cat > /etc/initramfs-tools/scripts/init-bottom/nextos-pivot <<'PIVOT'
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+exit 0
+PIVOT
+chmod 0755 /etc/initramfs-tools/scripts/init-bottom/nextos-pivot
+
+cat > /etc/initramfs-tools/hooks/nextos-loop <<'HOOKDEP'
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+. /usr/share/initramfs-tools/hook-functions
+manual_add_modules loop ext4 ntfs3 squashfs
+copy_exec /sbin/losetup /sbin
+copy_exec /sbin/blkid /sbin
+HOOKDEP
+chmod 0755 /etc/initramfs-tools/hooks/nextos-loop
+
+# This hook replaces the stock /init with the NextOS loop-mount init and
+# includes all required storage + filesystem modules on every initramfs rebuild.
+cat > /etc/initramfs-tools/hooks/nextos-init <<'INITHOOK'
+#!/bin/sh
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+. /usr/share/initramfs-tools/hook-functions
+# Replace stock /init with NextOS custom init
+if [ -f /usr/local/sbin/nextos-init ]; then
+    install -m 0755 /usr/local/sbin/nextos-init "${DESTDIR}/init"
+fi
+# Storage drivers (ensures disks appear in /proc/partitions)
+manual_add_modules sd_mod sr_mod ahci libahci ata_piix nvme \
+    virtio_blk virtio_scsi scsi_mod \
+    loop ext4 ntfs ntfs3 squashfs fuse
+# Required executables
+copy_exec /sbin/losetup   /sbin
+copy_exec /sbin/blkid     /sbin
+copy_exec /sbin/mkfs.ext4 /sbin
+if command -v ntfs-3g >/dev/null 2>&1; then
+    copy_exec "$(command -v ntfs-3g)" /sbin
+fi
+INITHOOK
+chmod 0755 /etc/initramfs-tools/hooks/nextos-init
+
+cat > /etc/initramfs-tools/modules <<'MODULES'
+loop
+ext4
+ntfs3
+squashfs
+sd_mod
+ahci
+ata_piix
+MODULES
+
+echo "[nextos-firstboot] installing kernel/initramfs ESP sync hooks"
+install -d -m 0755 /etc/kernel/postinst.d
+cat > /etc/kernel/postinst.d/zz-nextos-sync-boot <<'POSTINST'
+#!/bin/sh
+set -e
+VERSION="$1"
+BOOT_DIR="/host/NextOS/boot"
+[ -d "$BOOT_DIR" ] || exit 0
+if [ -f "/boot/vmlinuz-$VERSION" ]; then
+    install -m 0644 "/boot/vmlinuz-$VERSION" "$BOOT_DIR/vmlinuz.new"
+    mv "$BOOT_DIR/vmlinuz.new" "$BOOT_DIR/vmlinuz"
+fi
+if [ -f "/boot/initrd.img-$VERSION" ]; then
+    install -m 0644 "/boot/initrd.img-$VERSION" "$BOOT_DIR/initrd.img.new"
+    mv "$BOOT_DIR/initrd.img.new" "$BOOT_DIR/initrd.img"
+fi
+sync
+POSTINST
+chmod 0755 /etc/kernel/postinst.d/zz-nextos-sync-boot
+
+install -d -m 0755 /etc/initramfs/post-update.d
+cat > /etc/initramfs/post-update.d/zz-nextos-sync-boot <<'POSTIRFS'
+#!/bin/sh
+set -e
+VERSION="$1"
+GENERATED="$2"
+BOOT_DIR="/host/NextOS/boot"
+[ -d "$BOOT_DIR" ] || exit 0
+[ -n "$GENERATED" ] || exit 0
+[ -f "$GENERATED" ] || exit 0
+install -m 0644 "$GENERATED" "$BOOT_DIR/initrd.img.new"
+mv "$BOOT_DIR/initrd.img.new" "$BOOT_DIR/initrd.img"
+sync
+POSTIRFS
+chmod 0755 /etc/initramfs/post-update.d/zz-nextos-sync-boot
+
+echo "[nextos-firstboot] persisting host fstab entry"
+mkdir -p /host
+ROOT_DEV=$(findmnt -no SOURCE /)
+HOST_DEV=$(findmnt -no SOURCE /host 2>/dev/null || true)
+# Use the real blkid UUID of the host device (NTFS 64-bit serial). The Windows
+# 32-bit serial in NEXTOS_HOST_SERIAL does NOT match the by-uuid symlink.
+HOST_FSTAB_SRC=""
+if [ -n "$HOST_DEV" ]; then
+    HOST_UUID=$(blkid -s UUID -o value "$HOST_DEV" 2>/dev/null || true)
+    if [ -n "$HOST_UUID" ]; then
+        HOST_FSTAB_SRC="UUID=$HOST_UUID"
+    else
+        HOST_FSTAB_SRC="$HOST_DEV"
+    fi
+fi
+cat > /etc/fstab <<FSTAB
+$ROOT_DEV  /        ext4    defaults,noatime,errors=remount-ro,commit=60   0 1
+FSTAB
+if [ -n "$HOST_FSTAB_SRC" ]; then
+    echo "$HOST_FSTAB_SRC  /host  ntfs3  defaults,noatime,nofail  0 0" >> /etc/fstab
+fi
+
+DM_SET=""
+for dm in lightdm gdm3 sddm; do
+    if [ -f "/lib/systemd/system/$dm.service" ] || [ -f "/etc/systemd/system/$dm.service" ]; then
+        if systemctl enable "$dm.service" 2>/dev/null; then
+            DM_SET="$dm"
+            break
+        fi
+    fi
+done
+systemctl set-default graphical.target 2>/dev/null || true
+
+case "$DM_SET" in
+    lightdm)
+        install -d -m 0755 /etc/lightdm/lightdm.conf.d
+        cat > /etc/lightdm/lightdm.conf.d/50-nextos.conf <<LCFG
+[Seat:*]
+autologin-user=$NEXTOS_USERNAME
+autologin-user-timeout=0
+LCFG
+        ;;
+    gdm3)
+        install -d -m 0755 /etc/gdm3
+        cat > /etc/gdm3/daemon.conf <<GCFG
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=$NEXTOS_USERNAME
+WaylandEnable=false
+GCFG
+        ;;
+    sddm)
+        install -d -m 0755 /etc/sddm.conf.d
+        cat > /etc/sddm.conf.d/50-nextos.conf <<SCFG
+[Autologin]
+User=$NEXTOS_USERNAME
+Session=plasma.desktop
+Relogin=false
+SCFG
+        ;;
+esac
+
+echo "[nextos-firstboot] regenerating initramfs"
+update-initramfs -u -k all || true
+
+CUR_KERNEL=$(uname -r)
+BOOT_DIR="/host/NextOS/boot"
+if [ -d "$BOOT_DIR" ]; then
+    [ -f "/boot/vmlinuz-$CUR_KERNEL" ] && cp "/boot/vmlinuz-$CUR_KERNEL" "$BOOT_DIR/vmlinuz"
+    [ -f "/boot/initrd.img-$CUR_KERNEL" ] && cp "/boot/initrd.img-$CUR_KERNEL" "$BOOT_DIR/initrd.img"
+    sync
+fi
+
+shred -u "$CONF" 2>/dev/null || rm -f "$CONF"
+touch "$COMPLETE"
+
+systemctl disable nextos-firstboot.service 2>/dev/null || true
+rm -f /etc/systemd/system/multi-user.target.wants/nextos-firstboot.service
+
+sync
+sleep 2
+systemctl reboot
