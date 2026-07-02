@@ -220,19 +220,50 @@ pub fn place_boot_payload_on_host(
     Ok(())
 }
 
+/// Chunked copy so the caller can report real progress instead of the UI
+/// sitting frozen for the several-GB squashfs transfer.
 pub fn copy_squashfs_from_iso(
     iso_drive_letter: &str,
     squashfs_rel: &str,
     dest: &Path,
+    mut progress: impl FnMut(u64, u64),
 ) -> Result<u64, InstallerError> {
+    use std::io::Read;
+
     let src = format!(
         "{}:\\{}",
         iso_drive_letter.trim_end_matches(':'),
         squashfs_rel.replace('/', "\\")
     );
-    let bytes = std::fs::copy(&src, dest)
-        .map_err(|e| InstallerError::Io(format!("squashfs copy failed ({}): {}", src, e)))?;
-    Ok(bytes)
+    let total = std::fs::metadata(&src)
+        .map(|m| m.len())
+        .map_err(|e| InstallerError::Io(format!("squashfs stat failed ({}): {}", src, e)))?;
+
+    let mut reader = std::fs::File::open(&src)
+        .map_err(|e| InstallerError::Io(format!("squashfs open failed ({}): {}", src, e)))?;
+    let mut writer = std::fs::File::create(dest)
+        .map_err(|e| InstallerError::Io(format!("squashfs dest create failed: {}", e)))?;
+
+    const CHUNK: usize = 16 * 1024 * 1024;
+    let mut buf = vec![0u8; CHUNK];
+    let mut done: u64 = 0;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| InstallerError::Io(format!("squashfs read failed: {}", e)))?;
+        if n == 0 {
+            break;
+        }
+        writer
+            .write_all(&buf[..n])
+            .map_err(|e| InstallerError::Io(format!("squashfs write failed: {}", e)))?;
+        done += n as u64;
+        progress(done, total);
+    }
+    writer
+        .sync_all()
+        .map_err(|e| InstallerError::Io(format!("squashfs sync failed: {}", e)))?;
+    Ok(done)
 }
 
 pub fn read_squashfs_size(iso_drive_letter: &str, squashfs_rel: &str) -> Result<u64, InstallerError> {

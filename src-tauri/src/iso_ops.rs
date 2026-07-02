@@ -46,12 +46,17 @@ pub fn mount_iso(iso_path: &str) -> Result<String, InstallerError> {
 
     let _ = unmount_iso(iso_path);
 
+    // Poll for the volume instead of a fixed sleep — usually ready in <500ms.
     let script = format!(
         r#"
         $img = Mount-DiskImage -ImagePath '{}' -PassThru -ErrorAction Stop
-        Start-Sleep -Milliseconds 1500
-        $vol = $img | Get-Volume -ErrorAction Stop
-        if ($vol.DriveLetter) {{ $vol.DriveLetter }}
+        $letter = $null
+        for ($i = 0; $i -lt 40; $i++) {{
+            $vol = $img | Get-Volume -ErrorAction SilentlyContinue
+            if ($vol -and $vol.DriveLetter) {{ $letter = $vol.DriveLetter; break }}
+            Start-Sleep -Milliseconds 250
+        }}
+        if ($letter) {{ $letter }}
         else {{ throw "ISO mounted but no drive letter assigned" }}
         "#,
         iso_path.replace('\'', "''")

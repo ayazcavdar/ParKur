@@ -88,6 +88,15 @@ KBD
 dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 setupcon --save 2>/dev/null || true
 
+# Performance: the purges below fire the update-initramfs trigger once per
+# apt/dpkg run. Disable automatic regeneration for the whole provisioning
+# phase and generate the initramfs exactly once at the end.
+if [ -f /etc/initramfs-tools/update-initramfs.conf ]; then
+    sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf || true
+fi
+# man-db index rebuilds add minutes to package removal — skip them.
+echo 'man-db man-db/auto-update boolean false' | debconf-set-selections 2>/dev/null || true
+
 echo "[nextos-firstboot] purging live + installer packages"
 LIVE_PKGS="live-boot live-boot-doc live-boot-initramfs-tools live-config live-config-systemd live-config-doc live-tools casper user-setup"
 # The OS installer (Calamares) ships on the live image and puts the
@@ -298,8 +307,13 @@ SCFG
         ;;
 esac
 
-echo "[nextos-firstboot] regenerating initramfs"
-update-initramfs -u -k all || true
+# Re-enable automatic initramfs updates for the system's future life,
+# then generate it exactly once for the running kernel only.
+if [ -f /etc/initramfs-tools/update-initramfs.conf ]; then
+    sed -i 's/^update_initramfs=.*/update_initramfs=yes/' /etc/initramfs-tools/update-initramfs.conf || true
+fi
+echo "[nextos-firstboot] regenerating initramfs (single pass, current kernel)"
+update-initramfs -u -k "$(uname -r)" || update-initramfs -u -k all || true
 
 CUR_KERNEL=$(uname -r)
 BOOT_DIR="/host/NextOS/boot"

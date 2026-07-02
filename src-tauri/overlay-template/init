@@ -313,18 +313,48 @@ mount -t ext4 -o rw,noatime,errors=remount-ro "$LOOPDEV" /newroot \
 
 # ── First boot: bootstrap rootfs from squashfs ───────────────────────────────
 if [ ! -f "/newroot/.nextos-bootstrapped" ]; then
-    log "first boot — extracting rootfs from squashfs (5–15 min, please wait)"
+    log "first boot — extracting rootfs from squashfs (please wait)"
     SQUASH="/host${NEXTOS_SQUASHFS_PATH}"
     [ -f "$SQUASH" ] || fatal "squashfs not found at $SQUASH for bootstrap"
+
+    # Remount the target with fast-write options for the bulk extraction.
+    # barrier=0 + data=writeback avoids journal write amplification on the
+    # ext4 → loop → NTFS stack (worst case here is a failed FIRST boot,
+    # which simply means reinstalling — no user data exists yet).
+    # data= cannot be changed via remount, so do a full umount/mount cycle.
+    FAST_MOUNT=0
+    umount /newroot 2>/dev/null || true
+    if mount -t ext4 -o rw,noatime,barrier=0,data=writeback,commit=120 "$LOOPDEV" /newroot 2>/dev/null; then
+        FAST_MOUNT=1
+        log "extraction running in fast-write mode (barrier=0,data=writeback)"
+    else
+        mount -t ext4 -o rw,noatime,errors=remount-ro "$LOOPDEV" /newroot \
+            || fatal "ext4 remount for bootstrap failed"
+    fi
 
     SQTMP="/tmp/nextos-squash-src"
     mkdir -p "$SQTMP"
     mount -t squashfs -o loop,ro "$SQUASH" "$SQTMP" \
         || fatal "squashfs mount for bootstrap failed"
 
+    # Background progress ticker so the console doesn't look frozen.
+    (
+        while :; do
+            sleep 20
+            _used=$(df -k /newroot 2>/dev/null | awk 'NR==2{printf "%d", $3/1024}')
+            [ -n "$_used" ] && echo "[nextos] extracting... ${_used} MB written"
+        done
+    ) &
+    PROG_PID=$!
+
     cp -a "$SQTMP/." /newroot/
+    CP_RC=$?
+
+    kill "$PROG_PID" 2>/dev/null || true
+    wait "$PROG_PID" 2>/dev/null || true
     umount "$SQTMP" 2>/dev/null || true
     rmdir  "$SQTMP" 2>/dev/null || true
+    [ "$CP_RC" -eq 0 ] || fatal "rootfs extraction failed (rc=$CP_RC)"
     log "rootfs extraction complete"
 
     # Stage provisioning config
@@ -385,6 +415,16 @@ FSTAB
 
     touch /newroot/.nextos-bootstrapped
     log "bootstrap staging complete"
+
+    # Back to safe mount options before the real system starts using it.
+    if [ "$FAST_MOUNT" -eq 1 ]; then
+        sync
+        umount /newroot \
+            || fatal "umount after fast-mode extraction failed"
+        mount -t ext4 -o rw,noatime,errors=remount-ro "$LOOPDEV" /newroot \
+            || fatal "final ext4 mount failed"
+        log "remounted with safe journal options"
+    fi
 fi
 
 # ── Make /host accessible from new root ──────────────────────────────────────

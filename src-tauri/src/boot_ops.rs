@@ -1,5 +1,5 @@
 use crate::error::InstallerError;
-use crate::util::{extract_first_guid, run_powershell, write_lf_file_to_protected_path, CREATE_NO_WINDOW};
+use crate::util::{extract_first_guid, run_powershell, CREATE_NO_WINDOW};
 use serde::{Deserialize, Serialize};
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -88,12 +88,9 @@ pub fn copy_efi_payload_from_iso(
 
     let esp_nextos = format!("{}:\\{}", esp_letter, ESP_NEXTOS_DIR);
 
-    // Create destination directory
-    let mk = format!(
-        "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null",
-        esp_nextos.replace('\'', "''")
-    );
-    let _ = run_powershell(&mk);
+    // Create destination directory (direct fs call — the process is elevated,
+    // no need to spawn PowerShell for a mkdir)
+    let _ = std::fs::create_dir_all(&esp_nextos);
 
     // Collect lowercase names of .efi files that were successfully copied
     let mut copied: Vec<String> = Vec::new();
@@ -160,11 +157,7 @@ pub fn copy_efi_payload_from_iso(
     // IMPORTANT: shim (BOOTX64.EFI) AND grubx64.efi must be in the SAME
     // directory, because shim looks for grubx64.efi next to itself.
     let esp_boot_dir = format!("{}:\\{}", esp_letter, ESP_REMOVABLE_DIR);
-    let mk_boot = format!(
-        "New-Item -Path '{}' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null",
-        esp_boot_dir.replace('\'', "''")
-    );
-    let _ = run_powershell(&mk_boot);
+    let _ = std::fs::create_dir_all(&esp_boot_dir);
 
     // Copy the chosen boot EFI as BOOTX64.EFI (the fallback entry)
     let primary_src = format!("{}\\{}", esp_nextos, boot_name);
@@ -186,7 +179,7 @@ pub fn copy_efi_payload_from_iso(
 pub fn generate_loop_grub_cfg(host_serial: &str) -> String {
     format!(
         r#"set default="0"
-set timeout="10"
+set timeout="3"
 set timeout_style="menu"
 
 insmod part_gpt
@@ -250,15 +243,23 @@ pub fn write_grub_cfg(esp_letter: &str, content: &str) -> Result<(), InstallerEr
         "boot\\grub\\grub.cfg",
     ];
 
+    // Direct writes — the elevated process can write to the mounted ESP
+    // without spawning one PowerShell per file.
+    let lf = crate::util::to_lf(content);
     for rel in locations {
         let dest = format!("{}:\\{}", esp_letter, rel);
+        if let Some(parent) = Path::new(&dest).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         // Best-effort — non-fatal if a specific path fails
-        let _ = write_lf_file_to_protected_path(&dest, content);
+        let _ = std::fs::write(&dest, lf.as_bytes());
     }
 
     // At least the primary must succeed
-    let primary = format!("{}:\\{}", esp_letter, "EFI\\debian\\grub.cfg");
-    write_lf_file_to_protected_path(&primary, content)?;
+    let primary = format!("{}:\\EFI\\debian\\grub.cfg", esp_letter);
+    std::fs::write(&primary, lf.as_bytes()).map_err(|e| {
+        InstallerError::BootloaderConfig(format!("grub.cfg write failed ({}): {}", primary, e))
+    })?;
 
     Ok(())
 }

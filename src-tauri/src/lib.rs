@@ -181,7 +181,30 @@ async fn start_installation(
     }
 
     emit(&app, "image", 50, "Copying root payload (squashfs) to host");
-    if let Err(e) = image_ops::copy_squashfs_from_iso(&iso_drive, &squashfs_rel, &layout.squashfs) {
+    // Map copy progress onto the 50–62% band with real MB counters.
+    let mut last_pct: u32 = 0;
+    let copy_result = image_ops::copy_squashfs_from_iso(
+        &iso_drive,
+        &squashfs_rel,
+        &layout.squashfs,
+        |done, total| {
+            let pct = 50 + ((done as f64 / total.max(1) as f64) * 12.0) as u32;
+            if pct > last_pct {
+                last_pct = pct;
+                emit(
+                    &app,
+                    "image",
+                    pct,
+                    &format!(
+                        "Copying squashfs... {} / {} MB",
+                        done / (1024 * 1024),
+                        total / (1024 * 1024)
+                    ),
+                );
+            }
+        },
+    );
+    if let Err(e) = copy_result {
         let _ = iso_ops::unmount_iso(&iso_path);
         image_ops::remove_host_artifacts(&layout);
         return Err(e);
