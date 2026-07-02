@@ -1,5 +1,5 @@
 use crate::error::InstallerError;
-use crate::util::{run_powershell, CREATE_NO_WINDOW};
+use crate::util::CREATE_NO_WINDOW;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -60,24 +60,14 @@ pub fn ensure_host_dir(layout: &HostImageLayout) -> Result<(), InstallerError> {
         .map_err(|e| InstallerError::Io(format!("host dir create failed: {}", e)))
 }
 
-pub fn get_free_bytes(drive_letter: &str) -> Result<u64, InstallerError> {
-    let letter = drive_letter.trim_end_matches(':');
-    let script = format!(
-        r#"(Get-Volume -DriveLetter '{}').SizeRemaining"#,
-        letter
-    );
-    let raw = run_powershell(&script)?;
-    raw.trim().parse::<u64>().map_err(|_| {
-        InstallerError::DiskOperation(format!("free space query failed: '{}'", raw.trim()))
-    })
-}
-
+/// `free` comes from the one-shot environment probe (`disk_ops::probe_environment`)
+/// so no extra PowerShell process is needed here.
 pub fn validate_capacity(
     drive_letter: &str,
+    free: u64,
     root_disk_bytes: u64,
     squashfs_bytes: u64,
 ) -> Result<(), InstallerError> {
-    let free = get_free_bytes(drive_letter)?;
     let required = root_disk_bytes
         .saturating_add(squashfs_bytes)
         .saturating_add(SAFETY_HEADROOM_BYTES);
@@ -275,28 +265,6 @@ pub fn read_squashfs_size(iso_drive_letter: &str, squashfs_rel: &str) -> Result<
     std::fs::metadata(&src)
         .map(|m| m.len())
         .map_err(|e| InstallerError::Io(format!("squashfs stat failed ({}): {}", src, e)))
-}
-
-pub fn get_ntfs_volume_serial(drive_letter: &str) -> Result<String, InstallerError> {
-    let letter = drive_letter.trim_end_matches(':');
-    let script = format!(
-        r#"(Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='{}:'" -ErrorAction Stop).VolumeSerialNumber"#,
-        letter
-    );
-    let raw = run_powershell(&script)?;
-    let serial: String = raw
-        .trim()
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .collect::<String>()
-        .to_uppercase();
-    if serial.is_empty() {
-        return Err(InstallerError::DiskOperation(format!(
-            "NTFS volume serial query failed for {}:",
-            letter
-        )));
-    }
-    Ok(serial)
 }
 
 pub fn write_provisioning_config(

@@ -347,14 +347,44 @@ if [ ! -f "/newroot/.nextos-bootstrapped" ]; then
     ) &
     PROG_PID=$!
 
-    cp -a "$SQTMP/." /newroot/
-    CP_RC=$?
+    # Fast path: multi-threaded unsquashfs, run via chroot from inside the
+    # squashfs itself (the initrd does not ship the binary). The target and
+    # the host volume are bind-mounted onto directories that already exist
+    # in the read-only image (/mnt and /media). Typically 2-4x faster than
+    # the single-threaded cp fallback below.
+    EXTRACT_RC=1
+    UNSQ=""
+    for _cand in /usr/bin/unsquashfs /bin/unsquashfs /usr/sbin/unsquashfs /sbin/unsquashfs; do
+        if [ -x "$SQTMP$_cand" ]; then
+            UNSQ="$_cand"
+            break
+        fi
+    done
+    if [ -n "$UNSQ" ] && [ -d "$SQTMP/mnt" ] && [ -d "$SQTMP/media" ]; then
+        log "extracting with unsquashfs (multi-threaded)"
+        if mount --bind /newroot "$SQTMP/mnt" 2>/dev/null \
+            && mount --bind /host "$SQTMP/media" 2>/dev/null; then
+            chroot "$SQTMP" "$UNSQ" -f -no-progress -d /mnt "/media$NEXTOS_SQUASHFS_PATH" \
+                && EXTRACT_RC=0 || EXTRACT_RC=$?
+        fi
+        umount "$SQTMP/media" 2>/dev/null || true
+        umount "$SQTMP/mnt"   2>/dev/null || true
+        [ "$EXTRACT_RC" -eq 0 ] || log "unsquashfs failed (rc=$EXTRACT_RC) — falling back to cp"
+    else
+        log "unsquashfs not available in image — using cp fallback"
+    fi
+
+    if [ "$EXTRACT_RC" -ne 0 ]; then
+        log "extracting with cp -a (single-threaded)"
+        cp -a "$SQTMP/." /newroot/
+        EXTRACT_RC=$?
+    fi
 
     kill "$PROG_PID" 2>/dev/null || true
     wait "$PROG_PID" 2>/dev/null || true
     umount "$SQTMP" 2>/dev/null || true
     rmdir  "$SQTMP" 2>/dev/null || true
-    [ "$CP_RC" -eq 0 ] || fatal "rootfs extraction failed (rc=$CP_RC)"
+    [ "$EXTRACT_RC" -eq 0 ] || fatal "rootfs extraction failed (rc=$EXTRACT_RC)"
     log "rootfs extraction complete"
 
     # Stage provisioning config

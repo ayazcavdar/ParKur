@@ -302,18 +302,6 @@ pub fn register_firmware_entry(esp_letter: &str, efi_path: &str) -> Result<Strin
     Ok(guid)
 }
 
-pub fn detect_secure_boot() -> bool {
-    let script = r#"
-        try {
-            $val = (Get-SecureBootUEFI -Name 'SecureBoot' -ErrorAction Stop).Bytes[0]
-            if ($val -eq 1) { "true" } else { "false" }
-        } catch { "false" }
-    "#;
-    run_powershell(script)
-        .map(|o| o.trim() == "true")
-        .unwrap_or(false)
-}
-
 fn run_bcdedit(args: &[&str]) -> Result<String, InstallerError> {
     let output = Command::new("bcdedit")
         .args(args)

@@ -104,12 +104,15 @@ async fn start_installation(
 ) -> Result<(), InstallerError> {
     emit(&app, "verify", 0, "Verifying environment");
 
-    if !disk_ops::check_admin_privileges()? {
+    // One PowerShell process for all environment facts (admin, firmware,
+    // Secure Boot, free space, volume serial) instead of five.
+    let probe = disk_ops::probe_environment(&host_drive_letter)?;
+    if !probe.is_admin {
         return Err(InstallerError::PermissionDenied(
             "Run the installer as Administrator.".into(),
         ));
     }
-    if boot_ops::detect_boot_mode()? == boot_ops::BootMode::LegacyBIOS {
+    if probe.boot_mode == "BIOS" {
         return Err(InstallerError::BootloaderConfig(
             "Legacy BIOS is not supported. UEFI firmware required.".into(),
         ));
@@ -159,8 +162,12 @@ async fn start_installation(
     );
 
     let layout = image_ops::build_layout(&host_drive_letter);
-    if let Err(e) = image_ops::validate_capacity(&host_drive_letter, root_disk_bytes, squashfs_bytes)
-    {
+    if let Err(e) = image_ops::validate_capacity(
+        &host_drive_letter,
+        probe.free_bytes,
+        root_disk_bytes,
+        squashfs_bytes,
+    ) {
         let _ = iso_ops::unmount_iso(&iso_path);
         return Err(e);
     }
@@ -211,14 +218,7 @@ async fn start_installation(
     }
 
     emit(&app, "image", 62, "Writing provisioning configuration");
-    let host_serial = match image_ops::get_ntfs_volume_serial(&host_drive_letter) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = iso_ops::unmount_iso(&iso_path);
-            image_ops::remove_host_artifacts(&layout);
-            return Err(e);
-        }
-    };
+    let host_serial = probe.volume_serial.clone();
     if let Err(e) = image_ops::write_provisioning_config(
         &layout,
         &user_name,
@@ -281,7 +281,7 @@ async fn start_installation(
         }
     };
 
-    if boot_ops::detect_secure_boot() {
+    if probe.secure_boot {
         emit(
             &app,
             "boot",

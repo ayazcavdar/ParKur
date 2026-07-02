@@ -1,450 +1,847 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NextOS Installer</title>
+  <title>ParKur — Pardus Kurulum Aracı</title>
   <style>
     :root {
-      --primary: #ff8c00;
-      --primary-hover: #e67e00;
-      --primary-light: rgba(255, 140, 0, 0.15);
-      --bg-dark: #1a1b1e;
-      --bg-card: #2d2f31;
-      --bg-input: #1a1a1a;
-      --border: #444;
-      --text: #f0f0f0;
-      --text-muted: #999;
-      --success: #00c853;
-      --error: #ff5252;
-      --warning: #ffc107;
+      --accent: #f28c18;
+      --accent-soft: #ffb347;
+      --accent-dim: rgba(242, 140, 24, 0.14);
+      --accent-border: rgba(242, 140, 24, 0.35);
+      --bg: #131417;
+      --bg-sidebar: #0e0f12;
+      --bg-card: #1b1d21;
+      --bg-inset: #121316;
+      --border: #2a2d33;
+      --border-soft: #232529;
+      --text: #ececec;
+      --text-dim: #9a9fa8;
+      --text-faint: #6b7078;
+      --success: #35c46a;
+      --error: #ff5c5c;
+      --warning: #f2c218;
     }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body { height: 100%; }
+
     body {
-      background-color: var(--bg-dark);
+      background: var(--bg);
       color: var(--text);
-      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
+      font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
       overflow: hidden;
       user-select: none;
     }
-    .header {
-      background: linear-gradient(135deg, #2d2f31 0%, #1a1b1e 100%);
-      padding: 16px 24px;
+
+    .app { display: flex; height: 100vh; }
+
+    /* ── Sidebar ─────────────────────────────────────── */
+    .sidebar {
+      width: 232px;
+      min-width: 232px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-soft);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .sidebar::after {
+      /* faint mountain range at the bottom of the sidebar */
+      content: '';
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      height: 180px;
+      background:
+        linear-gradient(to top, rgba(242,140,24,0.06), transparent 70%),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 232 180' preserveAspectRatio='none'%3E%3Cpath d='M0 180 L0 120 L46 58 L78 96 L110 40 L148 88 L186 30 L232 100 L232 180 Z' fill='%23181a1e'/%3E%3Cpath d='M0 180 L0 150 L38 106 L72 138 L118 84 L164 130 L204 92 L232 128 L232 180 Z' fill='%231d1f24'/%3E%3C/svg%3E") no-repeat bottom / 100% 180px;
+      pointer-events: none;
+    }
+
+    .brand {
+      padding: 26px 22px 20px;
       display: flex;
       align-items: center;
       gap: 12px;
-      border-bottom: 2px solid var(--primary);
     }
-    .header h1 { font-size: 18px; color: var(--primary); font-weight: 700; letter-spacing: 0.5px; }
-    .header .subtitle { font-size: 12px; color: var(--text-muted); }
-    .stepper {
+
+    .brand-logo { flex-shrink: 0; }
+
+    .brand-name {
+      font-size: 21px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      line-height: 1;
+      background: linear-gradient(120deg, var(--accent-soft), var(--accent));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--text-faint);
+      margin-top: 4px;
+      letter-spacing: 0.2px;
+    }
+
+    /* ── Steps (vertical) ────────────────────────────── */
+    .steps {
+      padding: 14px 22px;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px 40px;
-      gap: 0;
-      flex-wrap: wrap;
+      flex-direction: column;
+      position: relative;
+      z-index: 1;
     }
-    .step-item { display: flex; align-items: center; gap: 8px; }
+
+    .step-item { display: flex; align-items: center; gap: 12px; }
+
     .step-circle {
-      width: 32px; height: 32px;
+      width: 30px; height: 30px;
+      min-width: 30px;
       border-radius: 50%;
       border: 2px solid var(--border);
+      background: transparent;
       display: flex; align-items: center; justify-content: center;
-      font-size: 14px; font-weight: 600; color: var(--text-muted);
-      transition: all 0.3s;
+      font-size: 13px; font-weight: 600; color: var(--text-faint);
+      transition: all 0.35s ease;
     }
-    .step-circle.active { border-color: var(--primary); background: var(--primary); color: white; }
-    .step-circle.done { border-color: var(--success); background: var(--success); color: white; }
+
+    .step-circle.active {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #16130d;
+      box-shadow: 0 0 0 4px var(--accent-dim), 0 2px 10px rgba(242,140,24,0.35);
+    }
+
+    .step-circle.done {
+      border-color: var(--success);
+      background: transparent;
+      color: var(--success);
+    }
+
     .step-label {
-      font-size: 12px; color: var(--text-muted);
-      max-width: 100px; text-align: center;
-      transition: color 0.3s;
+      font-size: 13px;
+      color: var(--text-faint);
+      font-weight: 500;
+      transition: color 0.35s ease;
+      white-space: nowrap;
     }
-    .step-label.active { color: var(--primary); font-weight: 600; }
-    .step-label.done { color: var(--success); }
+
+    .step-label.active { color: var(--text); font-weight: 600; }
+    .step-label.done { color: var(--text-dim); }
+
     .step-line {
-      width: 28px; height: 2px;
+      width: 2px;
+      height: 20px;
+      margin: 3px 0 3px 14px;
       background: var(--border);
-      margin: 0 6px;
-      transition: background 0.3s;
+      border-radius: 1px;
+      transition: background 0.35s ease;
     }
+
     .step-line.done { background: var(--success); }
-    .content { flex: 1; padding: 0 40px 20px; overflow-y: auto; }
-    .step-page { display: none; animation: fadeIn 0.3s ease; }
-    .step-page.active { display: block; }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 18px 22px 20px;
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
+
+    .version { font-size: 11px; color: var(--text-faint); }
+
+    /* ── Main area ───────────────────────────────────── */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      min-width: 0;
+    }
+
+    .main::before {
+      /* soft warm glow, top right */
+      content: '';
+      position: absolute;
+      top: -220px; right: -180px;
+      width: 520px; height: 520px;
+      background: radial-gradient(circle, rgba(242,140,24,0.07) 0%, transparent 65%);
+      pointer-events: none;
+    }
+
+    .content {
+      flex: 1;
+      padding: 30px 36px 16px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .step-page { display: none; animation: pageIn 0.35s ease; }
+    .step-page.active { display: block; }
+
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
+    .page-desc  { font-size: 13px; color: var(--text-dim); margin: 6px 0 22px; max-width: 560px; line-height: 1.55; }
+
+    /* ── Cards ───────────────────────────────────────── */
     .card {
       background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 24px;
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      padding: 22px;
       margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
     }
+
     .card h2 {
-      font-size: 16px;
-      color: var(--primary);
-      margin-bottom: 16px;
-    }
-    label {
       font-size: 13px;
-      color: var(--text-muted);
-      display: block;
-      margin-bottom: 6px;
-    }
-    input[type="text"], input[type="password"], select {
-      width: 100%;
-      padding: 10px 14px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--bg-input);
-      color: var(--text);
-      font-size: 14px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-    input:focus, select:focus { border-color: var(--primary); }
-    input:read-only { cursor: default; opacity: 0.8; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .input-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 16px; }
-    .input-row .field { flex: 1; }
-    .btn {
-      padding: 12px 24px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
       font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: inline-flex;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+      display: flex;
       align-items: center;
       gap: 8px;
     }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-primary { background: var(--primary); color: white; }
-    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); }
-    .btn-secondary { background: var(--border); color: var(--text); }
-    .btn-secondary:hover:not(:disabled) { background: #555; }
-    .btn-danger { background: var(--error); color: white; }
-    .btn-danger:hover:not(:disabled) { background: #d32f2f; }
-    .btn-small { padding: 8px 16px; font-size: 13px; }
+
+    .card h2::before {
+      content: '';
+      width: 3px; height: 14px;
+      border-radius: 2px;
+      background: linear-gradient(var(--accent-soft), var(--accent));
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--text-dim);
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      padding: 10px 13px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--bg-inset);
+      color: var(--text);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    input:read-only { cursor: default; color: var(--text-dim); }
+    input::placeholder { color: var(--text-faint); }
+
+    select {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239a9fa8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 13px center;
+      padding-right: 34px;
+    }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .input-row { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+    .input-row .field { flex: 1; }
+
+    .hint { font-size: 11px; margin-top: 5px; display: block; min-height: 14px; color: var(--text-faint); }
+
+    /* ── Buttons ─────────────────────────────────────── */
+    .btn {
+      padding: 11px 22px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-soft) 0%, var(--accent) 55%, #d97a0c 100%);
+      color: #191104;
+      box-shadow: 0 3px 14px rgba(242,140,24,0.3);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 5px 20px rgba(242,140,24,0.42);
+      filter: brightness(1.05);
+    }
+
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover:not(:disabled) { border-color: var(--text-faint); color: var(--text); }
+
+    .btn-danger-ghost {
+      background: transparent;
+      color: var(--error);
+      border: 1px solid rgba(255,92,92,0.35);
+    }
+
+    .btn-danger-ghost:hover:not(:disabled) { background: rgba(255,92,92,0.08); border-color: var(--error); }
+
+    .btn-small { padding: 8px 15px; font-size: 13px; border-radius: 8px; }
+
+    /* ── Footer ──────────────────────────────────────── */
     .footer {
-      padding: 16px 40px;
+      padding: 14px 36px 18px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      border-top: 1px solid var(--border);
-      background: var(--bg-card);
       gap: 10px;
+      border-top: 1px solid var(--border-soft);
+      background: rgba(14,15,18,0.5);
     }
-    .progress-container { margin: 20px 0; }
+
+    /* ── Badges & boxes ──────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 11px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      width: fit-content;
+    }
+
+    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge-success { background: rgba(53,196,106,0.12); color: var(--success); }
+    .badge-error   { background: rgba(255,92,92,0.12);  color: var(--error); }
+    .badge-info    { background: var(--accent-dim);      color: var(--accent); }
+
+    .warning-box {
+      background: rgba(242,194,24,0.07);
+      border: 1px solid rgba(242,194,24,0.3);
+      border-radius: 10px;
+      padding: 13px 16px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: #e8d9a0;
+      margin-top: 14px;
+      display: flex;
+      gap: 11px;
+      align-items: flex-start;
+    }
+
+    .info-box {
+      background: var(--accent-dim);
+      border: 1px solid var(--accent-border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--text-dim);
+      margin-top: 16px;
+    }
+
+    .info-box b, .warning-box b { color: var(--text); }
+
+    /* ── System status rows ──────────────────────────── */
+    .sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .sys-item {
+      background: var(--bg-inset);
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      padding: 13px 16px;
+    }
+
+    .sys-item label { margin-bottom: 4px; }
+    .sys-item span { font-size: 14px; font-weight: 600; }
+
+    /* ── Partition rows ──────────────────────────────── */
+    .part-head {
+      display: grid;
+      grid-template-columns: 36px 1fr 1.4fr 90px 90px;
+      padding: 0 14px 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-faint);
+      font-weight: 600;
+    }
+
+    .host-row {
+      display: grid;
+      grid-template-columns: 36px 1fr 1.4fr 90px 90px;
+      align-items: center;
+      padding: 13px 14px;
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      background: var(--bg-inset);
+      transition: border-color 0.15s, background 0.15s;
+      font-size: 13.5px;
+    }
+
+    .host-row:hover { border-color: var(--text-faint); }
+
+    .host-row.selected {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      box-shadow: 0 0 0 3px rgba(242,140,24,0.08);
+    }
+
+    .host-row .radio {
+      width: 17px; height: 17px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      position: relative;
+      transition: border-color 0.15s;
+    }
+
+    .host-row.selected .radio { border-color: var(--accent); }
+
+    .host-row.selected .radio::after {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .drive-letter { font-weight: 700; font-size: 14px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* ── Slider ──────────────────────────────────────── */
+    input[type="range"] {
+      flex: 1;
+      appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--border);
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-soft), var(--accent));
+      border: 2px solid #0e0f12;
+      box-shadow: 0 2px 8px rgba(242,140,24,0.5);
+      transition: transform 0.12s;
+    }
+
+    input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+
+    .size-display {
+      text-align: center;
+      margin-top: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .size-display .val {
+      font-size: 34px;
+      font-weight: 700;
+      background: linear-gradient(120deg, var(--accent-soft), var(--accent));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .size-display .unit { font-size: 15px; color: var(--text-dim); margin-left: 4px; }
+
+    /* ── Progress ────────────────────────────────────── */
+    .progress-wrap { display: flex; align-items: center; gap: 16px; margin: 6px 0 18px; }
+
     .progress-bar-bg {
-      width: 100%;
-      height: 24px;
-      background: var(--bg-input);
-      border-radius: 12px;
+      flex: 1;
+      height: 10px;
+      background: var(--bg-inset);
+      border-radius: 6px;
       overflow: hidden;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-soft);
     }
+
     .progress-bar-fill {
       height: 100%;
-      background: linear-gradient(90deg, var(--primary) 0%, #ffab40 100%);
-      border-radius: 12px;
+      width: 0%;
+      border-radius: 6px;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--accent-soft) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 2.2s linear infinite;
       transition: width 0.5s ease;
+      font-size: 0;
+    }
+
+    @keyframes shimmer {
+      0%   { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+
+    .progress-pct {
+      font-size: 20px;
+      font-weight: 700;
+      min-width: 62px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent);
+    }
+
+    /* ── Log ─────────────────────────────────────────── */
+    .log-area {
+      background: #0c0d0f;
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      padding: 14px 16px;
+      max-height: 210px;
+      overflow-y: auto;
+      font-family: 'Cascadia Mono', 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .log-entry { white-space: pre-wrap; word-break: break-word; }
+    .log-entry.info    { color: #8b919b; }
+    .log-entry.success { color: var(--success); }
+    .log-entry.error   { color: var(--error); }
+    .log-entry.warn    { color: var(--warning); }
+
+    /* ── Result page ─────────────────────────────────── */
+    .result-hero { text-align: center; padding: 26px 0 8px; }
+
+    .result-icon-wrap {
+      width: 92px; height: 92px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
-      font-weight: 700;
-      color: white;
-      min-width: 40px;
+      font-size: 44px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent-border);
+      box-shadow: 0 0 40px rgba(242,140,24,0.18);
     }
-    .log-area {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px;
-      max-height: 200px;
-      overflow-y: auto;
-      font-family: 'Cascadia Code', 'Consolas', monospace;
-      font-size: 12px;
+
+    .result-text { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
+
+    .result-sub {
+      font-size: 13px;
+      color: var(--text-dim);
+      max-width: 480px;
+      margin: 0 auto 24px;
       line-height: 1.6;
     }
-    .log-entry { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
-    .log-entry.info { color: var(--text-muted); }
-    .log-entry.success { color: var(--success); }
-    .log-entry.error { color: var(--error); }
-    .log-entry.warn { color: var(--warning); }
-    .badge {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 600;
+
+    .result-sub code {
+      background: var(--bg-inset);
+      border: 1px solid var(--border-soft);
+      border-radius: 5px;
+      padding: 1px 6px;
+      font-size: 12px;
     }
-    .badge-success { background: rgba(0,200,83,0.15); color: var(--success); }
-    .badge-error { background: rgba(255,82,82,0.15); color: var(--error); }
-    .badge-info { background: rgba(255,140,0,0.15); color: var(--primary); }
-    .result-icon { font-size: 64px; text-align: center; margin: 16px 0; }
-    .result-text { text-align: center; font-size: 16px; margin-bottom: 8px; }
-    .result-sub { text-align: center; font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
-    .warning-box {
-      background: rgba(255,193,7,0.1);
-      border: 1px solid var(--warning);
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 13px;
-      color: var(--warning);
-      margin-top: 14px;
-      display: flex;
-      gap: 10px;
-      align-items: flex-start;
-    }
-    .info-box {
-      background: rgba(255,140,0,0.08);
-      border: 1px solid var(--primary);
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 13px;
-      color: var(--text);
-      margin-top: 14px;
-    }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { padding: 10px 8px; text-align: left; border-bottom: 2px solid var(--border); }
-    td { padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    tr.host-row { cursor: pointer; transition: background 0.15s; }
-    tr.host-row:hover { background: rgba(255,140,0,0.05); }
-    tr.host-row.selected { background: var(--primary-light); }
-    input[type="range"] {
-      flex: 1;
-      accent-color: var(--primary);
-      height: 6px;
-      cursor: pointer;
-    }
+
+    /* ── Scrollbar ───────────────────────────────────── */
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2e3138; border-radius: 5px; border: 2px solid var(--bg); }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3e46; }
+
+    code { font-family: 'Cascadia Mono', 'Consolas', monospace; }
   </style>
 </head>
 
 <body>
+  <div class="app">
 
-  <div class="header">
-    <div>
-      <h1>NextOS Installer</h1>
-      <div class="subtitle">Wubi-Style Loop-Mount Installer for Debian 12 / Pardus &mdash; v0.2.0</div>
-    </div>
-    <div style="margin-left:auto;">
-      <span class="badge badge-info" id="adminBadge">Checking...</span>
-    </div>
-  </div>
-
-  <div class="stepper">
-    <div class="step-item"><div class="step-circle active" id="stepCircle1">1</div><div class="step-label active" id="stepLabel1">ISO</div></div>
-    <div class="step-line" id="stepLine1"></div>
-    <div class="step-item"><div class="step-circle" id="stepCircle2">2</div><div class="step-label" id="stepLabel2">Account &amp; Locale</div></div>
-    <div class="step-line" id="stepLine2"></div>
-    <div class="step-item"><div class="step-circle" id="stepCircle3">3</div><div class="step-label" id="stepLabel3">Host &amp; Size</div></div>
-    <div class="step-line" id="stepLine3"></div>
-    <div class="step-item"><div class="step-circle" id="stepCircle4">4</div><div class="step-label" id="stepLabel4">Install</div></div>
-    <div class="step-line" id="stepLine4"></div>
-    <div class="step-item"><div class="step-circle" id="stepCircle5">5</div><div class="step-label" id="stepLabel5">Done</div></div>
-  </div>
-
-  <div class="content">
-
-    <div class="step-page active" id="page1">
-      <div class="card">
-        <h2>Select Source ISO</h2>
-        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
-          Pick a 64-bit UEFI-capable Pardus or Debian-derived live ISO. The installer extracts the kernel,
-          initrd, and squashfs filesystem from this image.
-        </p>
-        <div class="input-row">
-          <div class="field">
-            <label>ISO Path</label>
-            <input type="text" id="isoPath" placeholder="No ISO selected" readonly />
-          </div>
-          <button class="btn btn-secondary btn-small" id="btnSelectIso" style="margin-bottom:0;">Browse</button>
+    <!-- ── Sidebar ── -->
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="brand-logo" width="44" height="44" viewBox="0 0 64 64" fill="none">
+          <defs>
+            <linearGradient id="sunGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ffb347"/>
+              <stop offset="100%" stop-color="#f28c18"/>
+            </linearGradient>
+            <linearGradient id="peakGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#2e3138"/>
+              <stop offset="100%" stop-color="#1b1d21"/>
+            </linearGradient>
+          </defs>
+          <circle cx="42" cy="20" r="13" fill="url(#sunGrad)" opacity="0.95"/>
+          <path d="M2 58 L21 26 L33 42 L43 30 L62 58 Z" fill="url(#peakGrad)" stroke="#f28c18" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M21 26 L27 34 L21 38 L15 36 Z" fill="#f28c18" opacity="0.25"/>
+        </svg>
+        <div>
+          <div class="brand-name">ParKur</div>
+          <div class="brand-sub">Pardus Kurulum Aracı</div>
         </div>
-        <div id="isoStatus" style="font-size:12px; color:var(--text-muted);">Please select an ISO file.</div>
       </div>
 
-      <div class="card">
-        <h2>System Status</h2>
-        <div class="grid-2" style="font-size:13px;">
-          <div>
-            <label>Firmware Mode</label>
-            <span id="bootModeInfo" style="color:var(--text);">Checking...</span>
-          </div>
-          <div>
-            <label>Administrator Privilege</label>
-            <span id="adminInfo" style="color:var(--text);">Checking...</span>
-          </div>
-        </div>
-        <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-          <button class="btn btn-secondary btn-small" id="btnCleanOldEntries" onclick="cleanOldBootEntries()">Clean Old Boot Entries</button>
-          <button class="btn btn-danger btn-small" id="btnUninstall" onclick="openUninstallPrompt()">Uninstall NextOS</button>
-          <span id="cleanupStatus" style="font-size:12px; color:var(--text-muted);"></span>
-        </div>
+      <nav class="steps">
+        <div class="step-item"><div class="step-circle active" id="stepCircle1">1</div><div class="step-label active" id="stepLabel1">ISO Seçimi</div></div>
+        <div class="step-line" id="stepLine1"></div>
+        <div class="step-item"><div class="step-circle" id="stepCircle2">2</div><div class="step-label" id="stepLabel2">Kullanıcı Hesabı</div></div>
+        <div class="step-line" id="stepLine2"></div>
+        <div class="step-item"><div class="step-circle" id="stepCircle3">3</div><div class="step-label" id="stepLabel3">Disk ve Boyut</div></div>
+        <div class="step-line" id="stepLine3"></div>
+        <div class="step-item"><div class="step-circle" id="stepCircle4">4</div><div class="step-label" id="stepLabel4">Kurulum</div></div>
+        <div class="step-line" id="stepLine4"></div>
+        <div class="step-item"><div class="step-circle" id="stepCircle5">5</div><div class="step-label" id="stepLabel5">Tamamlandı</div></div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="badge badge-info" id="adminBadge">Denetleniyor...</span>
+        <div class="version">ParKur v0.2.0 &middot; Wubi tarzı kurulum</div>
       </div>
-    </div>
+    </aside>
 
-    <div class="step-page" id="page2">
-      <div class="card">
-        <h2>Account &amp; Locale</h2>
-        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
-          These values are written to the first-boot provisioning config and consumed by the systemd
-          one-shot service that runs after the rootfs is bootstrapped. The config file is shredded
-          immediately after first-boot completes.
-        </p>
-        <div class="grid-2">
-          <div>
-            <label>Username (lowercase, no spaces)</label>
-            <input type="text" id="userName" placeholder="e.g. ayaz" oninput="formatUsername()" />
-            <span id="userNameHint" style="font-size:11px; color:var(--text-muted);"></span>
+    <!-- ── Main ── -->
+    <main class="main">
+      <div class="content">
+
+        <!-- Adım 1: ISO -->
+        <div class="step-page active" id="page1">
+          <h1 class="page-title">Kaynak ISO Seçin</h1>
+          <p class="page-desc">
+            64-bit UEFI destekli bir Pardus veya Debian tabanlı canlı (live) ISO dosyası seçin.
+            Çekirdek, initrd ve squashfs dosya sistemi bu kalıptan çıkarılır.
+          </p>
+
+          <div class="card">
+            <h2>ISO Dosyası</h2>
+            <div class="input-row">
+              <div class="field">
+                <label>ISO Yolu</label>
+                <input type="text" id="isoPath" placeholder="Henüz ISO seçilmedi" readonly />
+              </div>
+              <button class="btn btn-ghost btn-small" id="btnSelectIso" style="margin-bottom:1px;">Gözat</button>
+            </div>
+            <div id="isoStatus" style="font-size:12px; color:var(--text-dim);">Lütfen bir ISO dosyası seçin.</div>
           </div>
-          <div>
-            <label>Hostname</label>
-            <input type="text" id="hostName" placeholder="e.g. nextos" oninput="formatHostname()" />
-            <span id="hostNameHint" style="font-size:11px; color:var(--text-muted);"></span>
-          </div>
-        </div>
-        <div class="grid-2" style="margin-top:14px;">
-          <div>
-            <label>Password</label>
-            <input type="password" id="userPassword" placeholder="Login password" oninput="validateStep()" />
-          </div>
-          <div>
-            <label>Confirm Password</label>
-            <input type="password" id="userPasswordConfirm" placeholder="Re-enter password" oninput="validateStep()" />
-            <span id="passwordMatchHint" style="font-size:11px; color:var(--text-muted);"></span>
-          </div>
-        </div>
-        <div class="grid-2" style="margin-top:14px;">
-          <div>
-            <label>Locale</label>
-            <select id="locale" onchange="validateStep()">
-              <option value="en_US.UTF-8" selected>en_US.UTF-8</option>
-              <option value="en_GB.UTF-8">en_GB.UTF-8</option>
-              <option value="tr_TR.UTF-8">tr_TR.UTF-8</option>
-              <option value="de_DE.UTF-8">de_DE.UTF-8</option>
-              <option value="fr_FR.UTF-8">fr_FR.UTF-8</option>
-              <option value="es_ES.UTF-8">es_ES.UTF-8</option>
-              <option value="ru_RU.UTF-8">ru_RU.UTF-8</option>
-              <option value="ja_JP.UTF-8">ja_JP.UTF-8</option>
-              <option value="zh_CN.UTF-8">zh_CN.UTF-8</option>
-            </select>
-          </div>
-          <div>
-            <label>Timezone</label>
-            <select id="timezone" onchange="validateStep()">
-              <option value="UTC" selected>UTC</option>
-              <option value="Europe/Istanbul">Europe/Istanbul</option>
-              <option value="Europe/London">Europe/London</option>
-              <option value="Europe/Berlin">Europe/Berlin</option>
-              <option value="Europe/Paris">Europe/Paris</option>
-              <option value="Europe/Moscow">Europe/Moscow</option>
-              <option value="America/New_York">America/New_York</option>
-              <option value="America/Los_Angeles">America/Los_Angeles</option>
-              <option value="Asia/Tokyo">Asia/Tokyo</option>
-              <option value="Asia/Shanghai">Asia/Shanghai</option>
-              <option value="Asia/Dubai">Asia/Dubai</option>
-              <option value="Australia/Sydney">Australia/Sydney</option>
-            </select>
+
+          <div class="card">
+            <h2>Sistem Durumu</h2>
+            <div class="sys-grid">
+              <div class="sys-item">
+                <label>Donanım Yazılımı (Firmware)</label>
+                <span id="bootModeInfo">Denetleniyor...</span>
+              </div>
+              <div class="sys-item">
+                <label>Yönetici Yetkisi</label>
+                <span id="adminInfo">Denetleniyor...</span>
+              </div>
+            </div>
+            <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border-soft); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <button class="btn btn-ghost btn-small" id="btnCleanOldEntries" onclick="cleanOldBootEntries()">Eski Önyükleme Girdilerini Temizle</button>
+              <button class="btn btn-danger-ghost btn-small" id="btnUninstall" onclick="openUninstallPrompt()">ParKur'u Kaldır</button>
+              <span id="cleanupStatus" style="font-size:12px; color:var(--text-dim);"></span>
+            </div>
           </div>
         </div>
-        <div class="info-box">
-          The user account is granted <code>sudo</code> privileges. Auto-login is configured for the
-          detected display manager (LightDM / GDM3 / SDDM).
+
+        <!-- Adım 2: Hesap -->
+        <div class="step-page" id="page2">
+          <h1 class="page-title">Kullanıcı Hesabı ve Bölge</h1>
+          <p class="page-desc">
+            Bu bilgiler ilk açılışta sistemi otomatik yapılandırmak için kullanılır.
+            Yapılandırma dosyası kurulum tamamlanır tamamlanmaz güvenli şekilde silinir.
+          </p>
+
+          <div class="card">
+            <h2>Hesap Bilgileri</h2>
+            <div class="grid-2">
+              <div>
+                <label>Kullanıcı Adı <span style="color:var(--text-faint);">(küçük harf)</span></label>
+                <input type="text" id="userName" placeholder="örn. ayaz" oninput="formatUsername()" />
+                <span class="hint" id="userNameHint"></span>
+              </div>
+              <div>
+                <label>Bilgisayar Adı</label>
+                <input type="text" id="hostName" placeholder="örn. pardus-pc" oninput="formatHostname()" />
+                <span class="hint" id="hostNameHint"></span>
+              </div>
+            </div>
+            <div class="grid-2" style="margin-top:6px;">
+              <div>
+                <label>Parola</label>
+                <input type="password" id="userPassword" placeholder="Oturum açma parolası" oninput="validateStep()" />
+              </div>
+              <div>
+                <label>Parola (Tekrar)</label>
+                <input type="password" id="userPasswordConfirm" placeholder="Parolayı yeniden girin" oninput="validateStep()" />
+                <span class="hint" id="passwordMatchHint"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Bölge Ayarları</h2>
+            <div class="grid-2">
+              <div>
+                <label>Dil / Yerel Ayar</label>
+                <select id="locale" onchange="validateStep()">
+                  <option value="tr_TR.UTF-8" selected>Türkçe — tr_TR.UTF-8</option>
+                  <option value="en_US.UTF-8">English (US) — en_US.UTF-8</option>
+                  <option value="en_GB.UTF-8">English (UK) — en_GB.UTF-8</option>
+                  <option value="de_DE.UTF-8">Deutsch — de_DE.UTF-8</option>
+                  <option value="fr_FR.UTF-8">Français — fr_FR.UTF-8</option>
+                  <option value="es_ES.UTF-8">Español — es_ES.UTF-8</option>
+                  <option value="ru_RU.UTF-8">Русский — ru_RU.UTF-8</option>
+                  <option value="ja_JP.UTF-8">日本語 — ja_JP.UTF-8</option>
+                  <option value="zh_CN.UTF-8">中文 — zh_CN.UTF-8</option>
+                </select>
+              </div>
+              <div>
+                <label>Saat Dilimi</label>
+                <select id="timezone" onchange="validateStep()">
+                  <option value="Europe/Istanbul" selected>İstanbul (UTC+3)</option>
+                  <option value="UTC">UTC</option>
+                  <option value="Europe/London">Londra</option>
+                  <option value="Europe/Berlin">Berlin</option>
+                  <option value="Europe/Paris">Paris</option>
+                  <option value="Europe/Moscow">Moskova</option>
+                  <option value="America/New_York">New York</option>
+                  <option value="America/Los_Angeles">Los Angeles</option>
+                  <option value="Asia/Tokyo">Tokyo</option>
+                  <option value="Asia/Shanghai">Şanghay</option>
+                  <option value="Asia/Dubai">Dubai</option>
+                  <option value="Australia/Sydney">Sidney</option>
+                </select>
+              </div>
+            </div>
+            <div class="info-box">
+              Klavye düzeni seçilen dile göre otomatik ayarlanır. Kullanıcı hesabına <b>sudo</b> yetkisi verilir
+              ve masaüstüne otomatik giriş yapılandırılır.
+            </div>
+          </div>
         </div>
+
+        <!-- Adım 3: Disk -->
+        <div class="step-page" id="page3">
+          <h1 class="page-title">Disk ve İmaj Boyutu</h1>
+          <p class="page-desc">
+            Pardus, seçtiğiniz NTFS diskteki tek bir <code style="color:var(--accent);">root.disk</code> dosyasının
+            içine kurulur. Bölümler değiştirilmez, küçültülmez, veri kaybı yaşanmaz.
+          </p>
+
+          <div class="card">
+            <h2>Hedef Disk</h2>
+            <div id="partitionList">
+              <p style="color:var(--text-dim); font-size:13px;">Uygun diskler aranıyor...</p>
+            </div>
+
+            <div id="sizeSliderContainer" style="display:none; margin-top:20px; padding-top:18px; border-top:1px solid var(--border-soft);">
+              <label style="font-size:13px; color:var(--text);">Pardus disk alanı (root.disk boyutu)</label>
+              <div style="display:flex; align-items:center; gap:14px; margin-top:12px;">
+                <span style="font-size:12px; color:var(--text-faint); min-width:44px;" id="sliderMin">10 GB</span>
+                <input type="range" id="sizeSlider" min="10" max="100" value="20" step="1" oninput="updateSliderValue()" />
+                <span style="font-size:12px; color:var(--text-faint); min-width:48px; text-align:right;" id="sliderMax">100 GB</span>
+              </div>
+              <div class="size-display">
+                <span class="val" id="sliderValue">20</span><span class="unit">GB</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-faint); margin-top:2px;">
+                <span>En az 10 GB &middot; En fazla 100 GB</span>
+                <span id="sliderFreeInfo"></span>
+              </div>
+            </div>
+
+            <div class="warning-box">
+              <span style="font-size:16px;">&#9888;</span>
+              <div>
+                <b>Önemli:</b> Windows <b>Hızlı Başlatma</b> özelliğini kapatın
+                (Denetim Masası &rarr; Güç Seçenekleri &rarr; Güç düğmelerinin yapacaklarını seçin &rarr;
+                "Hızlı başlatmayı aç" işaretini kaldırın). Aksi halde Pardus, NTFS diski yazılabilir açamayabilir.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Adım 4: Kurulum -->
+        <div class="step-page" id="page4">
+          <h1 class="page-title">Kurulum Sürüyor</h1>
+          <p class="page-desc">
+            Dosyalar kopyalanıyor ve önyükleyici yapılandırılıyor. Bu işlem birkaç dakika sürebilir;
+            pencereyi kapatmayın.
+          </p>
+
+          <div class="card">
+            <h2>İlerleme</h2>
+            <div class="progress-wrap">
+              <div class="progress-bar-bg">
+                <div class="progress-bar-fill" id="progressBar" style="width:0%;"></div>
+              </div>
+              <div class="progress-pct" id="progressPct">0%</div>
+            </div>
+            <p id="progressStep" style="font-size:14px; font-weight:600; margin-bottom:4px;">Hazırlanıyor...</p>
+            <p id="progressMessage" style="font-size:12.5px; color:var(--text-dim);">Başlatılıyor...</p>
+          </div>
+
+          <div class="card">
+            <h2>İşlem Günlüğü</h2>
+            <div class="log-area" id="logArea">
+              <div class="log-entry info">Kurulum başlatıldı</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Adım 5: Bitti -->
+        <div class="step-page" id="page5">
+          <div class="result-hero">
+            <div class="result-icon-wrap" id="resultIcon" style="color:var(--accent);">&#10003;</div>
+            <div class="result-text" id="resultTitle">Kurulum Tamamlandı</div>
+            <div class="result-sub" id="resultMessage">
+              Önyükleme menüsüne "NextOS" girdisi eklendi. Bilgisayarı yeniden başlattığınızda
+              Pardus otomatik olarak kurulacak ve hazır hale gelecektir.
+            </div>
+            <div style="display:flex; gap:10px; justify-content:center;">
+              <button class="btn btn-primary" id="btnReboot" onclick="rebootNow()">Şimdi Yeniden Başlat</button>
+              <button class="btn btn-ghost" id="btnClose" onclick="window.close()">Kapat</button>
+            </div>
+          </div>
+        </div>
+
       </div>
-    </div>
 
-    <div class="step-page" id="page3">
-      <div class="card">
-        <h2>Host Volume &amp; Image Size</h2>
-        <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
-          Pick an existing NTFS volume to host <code>C:\NextOS\root.disk</code>. No physical partitions
-          are created, modified, or shrunk. The image is pre-allocated to your selected size
-          (valid-data length set so NTFS does not zero-fill on write).
-        </p>
-        <div id="partitionList" style="margin-bottom:16px;">
-          <p style="color:var(--text-muted);">Loading host candidates...</p>
-        </div>
-        <div id="sizeSliderContainer" style="display:none; margin-top:16px;">
-          <label style="font-size:14px; font-weight:600; color:var(--text); margin-bottom:10px;">
-            root.disk size (pre-allocated, NTFS-hosted)
-          </label>
-          <div style="display:flex; align-items:center; gap:12px; margin-top:8px;">
-            <span style="font-size:12px; color:var(--text-muted);" id="sliderMin">10 GB</span>
-            <input type="range" id="sizeSlider" min="10" max="100" value="20" step="1" oninput="updateSliderValue()" />
-            <span style="font-size:12px; color:var(--text-muted);" id="sliderMax">100 GB</span>
-          </div>
-          <div style="text-align:center; margin-top:8px;">
-            <span style="font-size:24px; font-weight:700; color:var(--primary);" id="sliderValue">20</span>
-            <span style="font-size:14px; color:var(--text-muted);"> GB</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-top:4px;">
-            <span>Minimum 10 GB &middot; Maximum 100 GB</span>
-            <span id="sliderFreeInfo"></span>
-          </div>
-        </div>
-        <div class="warning-box">
-          <span style="font-size:18px;">&#9888;</span>
-          <div>
-            <strong>Important:</strong> Disable Windows Fast Startup (Control Panel &rarr; Power Options
-            &rarr; Choose what the power button does &rarr; uncheck "Turn on fast startup"). NextOS mounts
-            the NTFS host volume read-write at boot; an unclean Windows shutdown can prevent mounting.
-          </div>
-        </div>
+      <div class="footer">
+        <button class="btn btn-ghost" id="btnBack" onclick="backBtn()" style="display:none;">&larr; Geri</button>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary" id="btnStart" onclick="startBtn()" disabled>İleri &rarr;</button>
       </div>
-    </div>
+    </main>
 
-    <div class="step-page" id="page4">
-      <div class="card">
-        <h2>Installation Progress</h2>
-        <div class="progress-container">
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="progressBar" style="width: 0%;">0%</div>
-          </div>
-        </div>
-        <p id="progressStep" style="font-size:14px; font-weight:600; margin-bottom:4px;">Preparing...</p>
-        <p id="progressMessage" style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">Initializing...</p>
-      </div>
-
-      <div class="card">
-        <h2>Activity Log</h2>
-        <div class="log-area" id="logArea">
-          <div class="log-entry info">Installation started</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="step-page" id="page5">
-      <div class="card" style="text-align:center;">
-        <div class="result-icon" id="resultIcon">&#10003;</div>
-        <div class="result-text" id="resultTitle">Installation Complete</div>
-        <div class="result-sub" id="resultMessage">
-          The Windows Boot Manager now lists "NextOS". Reboot and select it from the firmware menu
-          to launch first-boot provisioning.
-        </div>
-        <div style="display:flex; gap:10px; justify-content:center; margin-top:16px;">
-          <button class="btn btn-primary" id="btnReboot" onclick="rebootNow()">Reboot Now</button>
-          <button class="btn btn-secondary" id="btnClose" onclick="window.close()">Close</button>
-        </div>
-      </div>
-    </div>
-
-  </div>
-
-  <div class="footer">
-    <button class="btn btn-secondary" id="btnBack" onclick="backBtn()" style="display:none;">&larr; Back</button>
-    <div style="flex:1;"></div>
-    <button class="btn btn-primary" id="btnStart" onclick="startBtn()" disabled>Next &rarr;</button>
   </div>
 
   <script>
@@ -465,8 +862,8 @@
       userName: '',
       password: '',
       hostName: '',
-      locale: 'en_US.UTF-8',
-      timezone: 'UTC',
+      locale: 'tr_TR.UTF-8',
+      timezone: 'Europe/Istanbul',
     };
 
     document.addEventListener('DOMContentLoaded', async () => {
@@ -482,13 +879,13 @@
     async function checkSystemInfo() {
       try {
         state.isAdmin = await invoke('check_admin');
-        document.getElementById('adminInfo').textContent = state.isAdmin ? 'Yes' : 'No';
+        document.getElementById('adminInfo').textContent = state.isAdmin ? 'Var' : 'Yok';
         document.getElementById('adminInfo').style.color = state.isAdmin ? 'var(--success)' : 'var(--error)';
-        document.getElementById('adminBadge').textContent = state.isAdmin ? 'Administrator' : 'Not Elevated';
+        document.getElementById('adminBadge').textContent = state.isAdmin ? 'Yönetici' : 'Yetki Yok';
         document.getElementById('adminBadge').className = state.isAdmin ? 'badge badge-success' : 'badge badge-error';
       } catch (e) {
-        document.getElementById('adminInfo').textContent = 'Failed';
-        document.getElementById('adminBadge').textContent = 'Error';
+        document.getElementById('adminInfo').textContent = 'Hata';
+        document.getElementById('adminBadge').textContent = 'Hata';
         document.getElementById('adminBadge').className = 'badge badge-error';
       }
       try {
@@ -497,7 +894,7 @@
         document.getElementById('bootModeInfo').style.color =
           state.bootMode === 'UEFI' ? 'var(--success)' : 'var(--error)';
       } catch (e) {
-        document.getElementById('bootModeInfo').textContent = 'Unknown';
+        document.getElementById('bootModeInfo').textContent = 'Bilinmiyor';
       }
     }
 
@@ -511,17 +908,17 @@
           state.isoPath = selected;
           document.getElementById('isoPath').value = state.isoPath;
           document.getElementById('isoStatus').innerHTML =
-            '<span style="color:var(--success);">&#10003; Selected: ' + getFileName(state.isoPath) + '</span>';
+            '<span style="color:var(--success);">&#10003; Seçildi: ' + getFileName(state.isoPath) + '</span>';
           try {
             state.isoSizeMb = await invoke('get_iso_size_mb', { path: state.isoPath });
             document.getElementById('isoStatus').innerHTML +=
-              ' <span style="color:var(--text-muted);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
+              ' <span style="color:var(--text-faint);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
           } catch (e) { state.isoSizeMb = 3000; }
           validateStep();
         }
       } catch (err) {
         document.getElementById('isoStatus').innerHTML =
-          '<span style="color:var(--error);">Error: ' + err + '</span>';
+          '<span style="color:var(--error);">Hata: ' + err + '</span>';
       }
     }
 
@@ -553,7 +950,7 @@
     }
 
     async function startInstallation() {
-      addLog('info', 'Installation pipeline started');
+      addLog('info', 'Kurulum hattı başlatıldı');
       try {
         await invoke('start_installation', {
           isoPath: state.isoPath,
@@ -569,56 +966,54 @@
         updateStepper();
         document.getElementById('resultIcon').innerHTML = '&#10003;';
         document.getElementById('resultIcon').style.color = 'var(--success)';
-        document.getElementById('resultTitle').textContent = 'Installation Complete';
+        document.getElementById('resultTitle').textContent = 'Kurulum Tamamlandı';
         document.getElementById('resultMessage').innerHTML =
-          'The Windows Boot Manager now lists "NextOS". Reboot and select it from the firmware menu to launch first-boot provisioning. ' +
-          'A fallback bootloader has been placed at <code>\\EFI\\BOOT\\BOOTX64.EFI</code> for NVRAM-wipe recovery.';
+          'Önyükleme menüsüne "NextOS" girdisi eklendi. Yeniden başlattığınızda Pardus otomatik kurulacak ve ' +
+          'kullanıcı hesabınızla hazır hale gelecektir. NVRAM sıfırlanırsa <code>\\EFI\\BOOT\\BOOTX64.EFI</code> ' +
+          'yedek önyükleyicisi devreye girer.';
       } catch (error) {
         addLog('error', String(error));
         state.currentStep = 5;
         updateStepper();
         document.getElementById('resultIcon').innerHTML = '&#10007;';
         document.getElementById('resultIcon').style.color = 'var(--error)';
-        document.getElementById('resultTitle').textContent = 'Installation Failed';
+        document.getElementById('resultTitle').textContent = 'Kurulum Başarısız';
         document.getElementById('resultMessage').textContent = String(error);
       }
     }
 
     async function loadPartitions() {
       const container = document.getElementById('partitionList');
-      container.innerHTML = '<p style="color:var(--text-muted);">Loading host candidates...</p>';
+      container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Uygun diskler aranıyor...</p>';
       state.selectedPartition = null;
       updateStepper();
       try {
         const partitions = await invoke('list_host_partitions');
         if (partitions.length === 0) {
-          container.innerHTML = '<p style="color:var(--error);">No suitable NTFS volume found.</p>';
+          container.innerHTML = '<p style="color:var(--error); font-size:13px;">Uygun NTFS diski bulunamadı.</p>';
           return;
         }
-        let html = '<table>';
-        html += '<tr><th></th><th>Drive</th><th>Label</th><th style="text-align:right;">Total</th><th style="text-align:right;">Free</th></tr>';
+        let html = '<div class="part-head"><span></span><span>Sürücü</span><span>Etiket</span><span style="text-align:right;">Toplam</span><span style="text-align:right;">Boş</span></div>';
         partitions.forEach((p, i) => {
           const enough = p.free_gb >= 12;
-          html += '<tr class="host-row" id="hostRow' + i + '" onclick="selectPartition(' + i + ')">';
-          html += '<td><input type="radio" name="partition" id="part' + i + '" ' + (i === 0 ? 'checked' : '') + ' /></td>';
-          html += '<td style="font-weight:600;">' + p.drive_letter + ':\\</td>';
-          html += '<td>' + p.label + '</td>';
-          html += '<td style="text-align:right;">' + p.size_gb + ' GB</td>';
-          html += '<td style="text-align:right;color:' + (enough ? 'var(--success)' : 'var(--error)') + ';">' + p.free_gb + ' GB</td>';
-          html += '</tr>';
+          html += '<div class="host-row" id="hostRow' + i + '" onclick="selectPartition(' + i + ')">';
+          html += '<span class="radio"></span>';
+          html += '<span class="drive-letter">' + p.drive_letter + ':\\</span>';
+          html += '<span style="color:var(--text-dim);">' + p.label + '</span>';
+          html += '<span class="num">' + p.size_gb + ' GB</span>';
+          html += '<span class="num" style="color:' + (enough ? 'var(--success)' : 'var(--error)') + ';">' + p.free_gb + ' GB</span>';
+          html += '</div>';
         });
-        html += '</table>';
         container.innerHTML = html;
         state.partitions = partitions;
         if (partitions.length > 0) selectPartition(0);
       } catch (err) {
-        container.innerHTML = '<p style="color:var(--error);">Error: ' + err + '</p>';
+        container.innerHTML = '<p style="color:var(--error); font-size:13px;">Hata: ' + err + '</p>';
       }
     }
 
     function selectPartition(index) {
       state.selectedPartition = state.partitions[index];
-      document.querySelectorAll('input[name="partition"]').forEach(function(el, i) { el.checked = (i === index); });
       document.querySelectorAll('.host-row').forEach(function(el, i) {
         el.classList.toggle('selected', i === index);
       });
@@ -634,7 +1029,7 @@
         slider.value = Math.min(20, maxGb);
         document.getElementById('sliderMin').textContent = minGb + ' GB';
         document.getElementById('sliderMax').textContent = maxGb + ' GB';
-        document.getElementById('sliderFreeInfo').textContent = 'Free on ' + p.drive_letter + ':\\ &mdash; ' + p.free_gb + ' GB';
+        document.getElementById('sliderFreeInfo').textContent = p.drive_letter + ':\\ üzerinde boş alan: ' + p.free_gb + ' GB';
         updateSliderValue();
         container.style.display = 'block';
       } else {
@@ -653,17 +1048,17 @@
       const btn = document.getElementById('btnCleanOldEntries');
       const status = document.getElementById('cleanupStatus');
       btn.disabled = true;
-      status.textContent = 'Scanning...';
-      status.style.color = 'var(--text-muted)';
+      status.textContent = 'Taranıyor...';
+      status.style.color = 'var(--text-dim)';
       try {
         const deleted = await invoke('cleanup_old_boot_entries');
         if (deleted.length === 0) {
-          status.innerHTML = '<span style="color:var(--success);">&#10003; No NextOS entries found.</span>';
+          status.innerHTML = '<span style="color:var(--success);">&#10003; Eski girdi bulunamadı.</span>';
         } else {
-          status.innerHTML = '<span style="color:var(--success);">&#10003; Removed ' + deleted.length + ' entries.</span>';
+          status.innerHTML = '<span style="color:var(--success);">&#10003; ' + deleted.length + ' girdi kaldırıldı.</span>';
         }
       } catch (e) {
-        status.innerHTML = '<span style="color:var(--error);">Error: ' + e + '</span>';
+        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
       }
       btn.disabled = false;
     }
@@ -673,7 +1068,7 @@
       try {
         const partitions = await invoke('list_host_partitions');
         if (!partitions.length) {
-          status.innerHTML = '<span style="color:var(--error);">No NTFS volumes detected.</span>';
+          status.innerHTML = '<span style="color:var(--error);">NTFS diski bulunamadı.</span>';
           return;
         }
         let target = null;
@@ -683,16 +1078,16 @@
         }
         const letters = partitions.map(p => p.drive_letter).join(', ');
         const chosen = window.prompt(
-          'Uninstall NextOS\n\nEnter the drive letter that hosts C:\\NextOS\\root.disk (one of: ' + letters + ')',
+          'ParKur Kaldırma\n\nNextOS\\root.disk dosyasını barındıran sürücü harfini girin (' + letters + ')',
           target.drive_letter
         );
         if (!chosen) return;
         const drive = chosen.trim().replace(':', '').toUpperCase();
-        status.textContent = 'Uninstalling from ' + drive + ':\\ ...';
+        status.textContent = drive + ':\\ üzerinden kaldırılıyor...';
         await invoke('uninstall_nextos', { hostDriveLetter: drive });
-        status.innerHTML = '<span style="color:var(--success);">&#10003; NextOS uninstalled cleanly from ' + drive + ':\\</span>';
+        status.innerHTML = '<span style="color:var(--success);">&#10003; ParKur ' + drive + ':\\ üzerinden temiz şekilde kaldırıldı.</span>';
       } catch (e) {
-        status.innerHTML = '<span style="color:var(--error);">Error: ' + e + '</span>';
+        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
       }
     }
 
@@ -700,7 +1095,7 @@
       try {
         await invoke('reboot_now');
       } catch (e) {
-        alert('Reboot failed: ' + e);
+        alert('Yeniden başlatma başarısız: ' + e);
       }
     }
 
@@ -733,17 +1128,17 @@
       const btnBack = document.getElementById('btnBack');
       if (state.currentStep === 1) {
         btnStart.style.display = 'inline-flex';
-        btnStart.innerHTML = 'Next &rarr;';
+        btnStart.innerHTML = 'İleri &rarr;';
         btnStart.disabled = !(state.isoPath && state.isAdmin && state.bootMode === 'UEFI');
         btnBack.style.display = 'none';
       } else if (state.currentStep === 2) {
         btnStart.style.display = 'inline-flex';
-        btnStart.innerHTML = 'Next &rarr;';
+        btnStart.innerHTML = 'İleri &rarr;';
         btnStart.disabled = !validateUserInfo();
         btnBack.style.display = 'inline-flex';
       } else if (state.currentStep === 3) {
         btnStart.style.display = 'inline-flex';
-        btnStart.innerHTML = 'Install';
+        btnStart.innerHTML = 'Kurulumu Başlat';
         btnStart.disabled = !state.selectedPartition;
         btnBack.style.display = 'inline-flex';
       } else {
@@ -779,10 +1174,10 @@
       if (hostName.length > 63) return false;
       if (password.length < 4) return false;
       if (password !== passwordConfirm) {
-        if (hint) hint.innerHTML = '<span style="color:var(--error);">Passwords do not match</span>';
+        if (hint) hint.innerHTML = '<span style="color:var(--error);">Parolalar eşleşmiyor</span>';
         return false;
       } else {
-        if (hint) hint.innerHTML = '<span style="color:var(--success);">&#10003; Passwords match</span>';
+        if (hint) hint.innerHTML = '<span style="color:var(--success);">&#10003; Parolalar eşleşiyor</span>';
       }
       return true;
     }
@@ -794,9 +1189,9 @@
       if (val && !/^[a-z]/.test(val)) val = val.replace(/^[^a-z]+/, '');
       input.value = val;
       if (val && /^[a-z][a-z0-9_-]*$/.test(val)) {
-        hint.innerHTML = '<span style="color:var(--success);">&#10003; Valid</span>';
+        hint.innerHTML = '<span style="color:var(--success);">&#10003; Uygun</span>';
       } else if (val) {
-        hint.innerHTML = '<span style="color:var(--error);">Must start with lowercase letter</span>';
+        hint.innerHTML = '<span style="color:var(--error);">Küçük harfle başlamalı</span>';
       } else {
         hint.textContent = '';
       }
@@ -809,9 +1204,9 @@
       let val = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
       input.value = val;
       if (val && /^[a-z0-9][a-z0-9-]*$/.test(val)) {
-        hint.innerHTML = '<span style="color:var(--success);">&#10003; Valid</span>';
+        hint.innerHTML = '<span style="color:var(--success);">&#10003; Uygun</span>';
       } else if (val) {
-        hint.innerHTML = '<span style="color:var(--error);">Lowercase alphanumeric and hyphen only</span>';
+        hint.innerHTML = '<span style="color:var(--error);">Yalnızca küçük harf, rakam ve tire</span>';
       } else {
         hint.textContent = '';
       }
@@ -820,16 +1215,19 @@
 
     function updateProgress(percent, stepName, message) {
       const bar = document.getElementById('progressBar');
+      const pct = document.getElementById('progressPct');
       const stepEl = document.getElementById('progressStep');
       const msgEl = document.getElementById('progressMessage');
       if (percent >= 0) {
         bar.style.width = percent + '%';
-        bar.textContent = percent + '%';
+        pct.textContent = percent + '%';
       }
       if (percent < 0) {
         bar.style.width = '100%';
         bar.style.background = 'var(--error)';
-        bar.textContent = 'ERROR';
+        bar.style.animation = 'none';
+        pct.textContent = 'HATA';
+        pct.style.color = 'var(--error)';
       }
       stepEl.textContent = stepName;
       msgEl.textContent = message;
@@ -838,21 +1236,21 @@
     function addLog(type, message) {
       const logArea = document.getElementById('logArea');
       const time = new Date().toLocaleTimeString();
-      const prefix = { info: 'INFO', success: 'OK', error: 'ERR', warn: 'WARN' };
+      const prefix = { info: 'BİLGİ', success: 'TAMAM', error: 'HATA', warn: 'UYARI' };
       const entry = document.createElement('div');
       entry.className = 'log-entry ' + type;
-      entry.textContent = '[' + time + '] [' + (prefix[type] || 'INFO') + '] ' + message;
+      entry.textContent = '[' + time + '] [' + (prefix[type] || 'BİLGİ') + '] ' + message;
       logArea.appendChild(entry);
       logArea.scrollTop = logArea.scrollHeight;
     }
 
     function prettyStep(step) {
       const map = {
-        verify: 'Verification',
-        iso: 'ISO Processing',
-        image: 'Image Construction',
-        boot: 'Bootloader',
-        done: 'Complete',
+        verify: 'Doğrulama',
+        iso: 'ISO İşleme',
+        image: 'İmaj Oluşturma',
+        boot: 'Önyükleyici',
+        done: 'Tamamlandı',
       };
       return map[step] || step;
     }
