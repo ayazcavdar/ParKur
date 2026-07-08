@@ -8,11 +8,24 @@ mod util;
 
 use crate::error::InstallerError;
 use serde::{Deserialize, Serialize};
+use sha_crypt::{PasswordHasher, ShaCrypt};
 use tauri::Emitter;
 #[cfg(debug_assertions)]
 use tauri::Manager;
 
 const BYTES_PER_GB: u64 = 1024 * 1024 * 1024;
+
+/// Hash the user's password as SHA-512 crypt (`$6$rounds=5000$salt$hash`) so
+/// only the hash ever leaves this process — the plaintext is never written to
+/// disk. The hash is applied on first boot via `chpasswd -e`.
+fn hash_password_sha512(password: &str) -> Result<String, InstallerError> {
+    let hash = ShaCrypt::SHA512
+        .hash_password(password.as_bytes())
+        .map_err(|e| {
+            InstallerError::CommandExecution(format!("password hashing failed: {}", e))
+        })?;
+    Ok(hash.as_str().to_string())
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ProgressPayload {
@@ -37,6 +50,11 @@ async fn cleanup_old_boot_entries() -> Result<Vec<String>, InstallerError> {
 }
 
 #[tauri::command]
+async fn check_fast_startup() -> Result<bool, InstallerError> {
+    disk_ops::check_fast_startup_enabled()
+}
+
+#[tauri::command]
 async fn list_host_partitions() -> Result<Vec<disk_ops::HostCandidate>, InstallerError> {
     disk_ops::list_host_candidates()
 }
@@ -54,8 +72,10 @@ fn validate_user_input(
     if user_name.is_empty() {
         return Err(InstallerError::InvalidInput("Username cannot be empty.".into()));
     }
-    if password.is_empty() {
-        return Err(InstallerError::InvalidInput("Password cannot be empty.".into()));
+    if password.len() < 4 {
+        return Err(InstallerError::InvalidInput(
+            "Password must be at least 4 characters.".into(),
+        ));
     }
     if hostname.is_empty() {
         return Err(InstallerError::InvalidInput("Hostname cannot be empty.".into()));
@@ -117,7 +137,15 @@ async fn start_installation(
             "Legacy BIOS is not supported. UEFI firmware required.".into(),
         ));
     }
+    if probe.bitlocker {
+        return Err(InstallerError::DiskOperation(format!(
+            "Drive {}:\\ is BitLocker-encrypted. Linux cannot read encrypted NTFS volumes — \
+             decrypt the drive or choose another one.",
+            host_drive_letter.trim_end_matches(':')
+        )));
+    }
     validate_user_input(&user_name, &password, &hostname)?;
+    let password_hash = hash_password_sha512(&password)?;
 
     if root_disk_size_gb < image_ops::MIN_ROOT_DISK_GB
         || root_disk_size_gb > image_ops::MAX_ROOT_DISK_GB
@@ -146,7 +174,13 @@ async fn start_installation(
         }
     };
 
-    let squashfs_bytes = image_ops::read_squashfs_size(&iso_drive, &squashfs_rel)?;
+    let squashfs_bytes = match image_ops::read_squashfs_size(&iso_drive, &squashfs_rel) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = iso_ops::unmount_iso(&iso_path);
+            return Err(e);
+        }
+    };
     let root_disk_bytes: u64 = (root_disk_size_gb as u64) * BYTES_PER_GB;
 
     emit(
@@ -222,7 +256,7 @@ async fn start_installation(
     if let Err(e) = image_ops::write_provisioning_config(
         &layout,
         &user_name,
-        &password,
+        &password_hash,
         &hostname,
         &locale,
         &timezone,
@@ -378,6 +412,25 @@ fn emit(app: &tauri::AppHandle, step: &str, progress: u32, message: &str) {
     );
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn password_hash_roundtrip() {
+        use sha_crypt::{PasswordVerifier, ShaCrypt};
+        let hash = super::hash_password_sha512("Dene me123!$#").unwrap();
+        assert!(hash.starts_with("$6$"), "unexpected hash format: {}", hash);
+        ShaCrypt::SHA512
+            .verify_password(b"Dene me123!$#", hash.as_str())
+            .expect("hash must verify against the original password");
+    }
+
+    #[test]
+    fn validate_rejects_short_password() {
+        assert!(super::validate_user_input("ayaz", "abc", "pc").is_err());
+        assert!(super::validate_user_input("ayaz", "abcd", "pc").is_ok());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -394,6 +447,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_admin,
             detect_boot_mode,
+            check_fast_startup,
             list_host_partitions,
             get_iso_size_mb,
             cleanup_old_boot_entries,

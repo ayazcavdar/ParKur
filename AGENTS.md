@@ -1,55 +1,78 @@
-# ParKur (Next OS Installer)
+# ParKur (NextOS Installer)
 
-Windows üzerinden Pardus/Debian tabanlı Linux ISO'larını diske kalıcı kuran bir masaüstü uygulaması. Tauri v2 (Rust backend + vanilla HTML/CSS/JS frontend) ile geliştirilmiştir.
+Windows üzerinden Pardus/Debian tabanlı **canlı (live)** ISO'ları, bölümleme yapmadan,
+NTFS üzerindeki tek bir `root.disk` dosyasının içine kuran masaüstü uygulaması
+(Wubi tarzı loop-mount mimarisi). Tauri v2 (Rust backend + vanilla HTML/CSS/JS frontend).
 
-## Ne Yapıyor?
+UI/uygulama adı **ParKur**, boot girdisi ve disk üzerindeki artifact'lar **NextOS** olarak adlandırılır.
 
-1. Kullanıcıdan bir Pardus/Debian ISO dosyası seçmesini istiyor
-2. Kullanıcı bilgilerini alıyor (kullanıcı adı, şifre, hostname)
-3. Hedef diski belirlettiriyor
-4. Preseed.cfg oluşturup ISO'yu otomatik kurulum için hazırlıyor
-5. GRUB bootloader'ı ESP'ye kurup BCD kaydı oluşturuyor
-6. Yeniden başlatarak Debian Installer'ı unattended modda çalıştırıyor
+## Mimari: Loop-Mount (Wubi tarzı)
 
-## Mimari: Preseed + Debian Installer (Unattended)
+Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan açılır:
 
-GUI tabanlı Live masaüstü **kullanmaz**. Debian'ın resmi preseed mekanizmasını kullanır:
-- ISO içindeki `install/vmlinuz` + `install/initrd.gz` (d-i kernel) ile boot
-- Preseed.cfg küçük bir cpio initrd olarak ek initrd şeklinde yüklenir
-- Debian Installer tamamen otomatik çalışır: disk bölümleme, dosya sistemi, paket kurulumu, kullanıcı oluşturma, GRUB kurulumu
-- ISO remaster gerekmez — orijinal ISO loopback ile boot edilir
+1. **Windows tarafı (kurulum):**
+   - Ortam denetimi tek PowerShell probe ile: admin, UEFI, Secure Boot, boş alan,
+     volume serial, **BitLocker** (şifreliyse kurulum reddedilir)
+   - `X:\NextOS\root.disk` `fsutil` ile prealloc edilir (baş/son sıfırlanır),
+     `filesystem.squashfs` + kernel + initrd ISO'dan kopyalanır
+   - `overlay.cpio.gz` Rust içinde native üretilir (cpio newc + gzip) — içinde
+     yalnızca `init` ve `nextos-firstboot` vardır
+   - Shim/GRUB zinciri ESP'ye kopyalanır (`EFI\NextOS` + `EFI\BOOT` fallback),
+     grub.cfg tüm olası GRUB prefix'lerine yazılır; **üzerine yazılan her dosya
+     önce `.parkur-backup` olarak yedeklenir** (uninstall geri yükler)
+   - `bcdedit /copy {bootmgr}` ile UEFI firmware girdisi ("NextOS") oluşturulur
+2. **İlk açılış (Linux):**
+   - GRUB iki initrd yükler: stok `initrd.img` + `overlay.cpio.gz`; overlay'deki
+     `/init` live-boot'un init'ini **ezer**
+   - `/init`: NTFS host'u marker dosyasıyla bulur (serial ile DEĞİL — Windows 32-bit
+     serial ile blkid'in 64-bit NTFS serial'ı asla eşleşmez), rw mount eder,
+     `root.disk`'i loop'a bağlar, ilk açılışta squashfs içinden chroot'la
+     `mkfs.ext4` + `unsquashfs` çalıştırır, `switch_root` yapar
+   - `nextos-firstboot.service`: kullanıcı oluşturma (parola **SHA-512 crypt hash**
+     olarak gelir, `chpasswd -e` ile uygulanır), hostname/locale/timezone/klavye,
+     canlı imaj kullanıcılarının (`pardus`, `user`, `live`, UID≥1000 artıkları) ve
+     autologin config'lerinin temizliği, Calamares/live paketlerinin purge edilmesi,
+     kalıcı initramfs hook'ları (kernel güncellemeleri `NextOS\boot`'a senkronlanır),
+     provisioning config'in (host taraf dahil) imha edilmesi, reboot
 
 ## Proje Yapısı
 
-- **src/** — Frontend (HTML/CSS/JS). Wizard arayüzü: ISO Seç → Kullanıcı Bilgileri → Disk Seç → Kurulum → Tamamlandı
-- **src-tauri/src/** — Rust backend:
-  - `lib.rs` — Tauri command handler'ları, kurulum akışı orchestration
-  - `disk_ops.rs` — PowerShell ile disk/bölüm listeleme, yönetici yetkisi kontrolü
-  - `iso_ops.rs` — ISO montaj/demontaj, Linux kernel dosyası arama (d-i + live)
-  - `boot_ops.rs` — UEFI/BIOS tespiti, ESP montaj, BCD yapılandırma, reboot
+- **src/index.html** — Frontend tamamı (stil + JS gömülü). 5 adımlı wizard:
+  ISO Seç → Kullanıcı Hesabı → Disk ve Boyut → Kurulum → Tamamlandı
+- **src-tauri/src/**
+  - `lib.rs` — Tauri komutları, kurulum orkestrasyon akışı, SHA-512 parola hash'leme
+  - `main.rs` — Giriş noktası, UAC self-elevation (yalnızca release build)
+  - `disk_ops.rs` — Ortam probe'u (admin/UEFI/SecureBoot/BitLocker/serial/boş alan),
+    NTFS bölüm listeleme, Fast Startup denetimi
+  - `iso_ops.rs` — ISO mount/dismount, kernel/initrd/squashfs arama
+  - `image_ops.rs` — root.disk prealloc, squashfs kopyalama (progress'li),
+    provisioning config yazımı (tek tırnak quote'lu, yalnızca hash)
+  - `initramfs_ops.rs` — Overlay initrd üretici (cpio newc + gzip, saf Rust)
+  - `boot_ops.rs` — ESP mount, EFI payload + grub.cfg (yedekli yazım), BCD/UEFI
+    girdi yönetimi, uninstall'da geri yükleme, reboot
   - `error.rs` — Merkezi hata tipi (`InstallerError`)
-  - `main.rs` — Giriş noktası, UAC yönetici yükseltme (release build)
+  - `util.rs` — PowerShell çalıştırıcı, yardımcılar
+- **src-tauri/overlay-template/**
+  - `init` — Özel initramfs `/init` (overlay'e gömülür; busybox uyumlu olmalı!)
+  - `usr/local/sbin/nextos-firstboot` — İlk açılış provisioning script'i (bash)
 
-## Yapılacaklar (Preseed Yaklaşımı)
+## Kritik Kurallar / Bilinmesi Gerekenler
 
-- [ ] `preseed_ops.rs` — Preseed.cfg üretici (disk, kullanıcı, locale, paket seçimi)
-- [ ] `cpio_ops.rs` — cpio newc arşiv üretici (preseed.cfg'yi initrd olarak paketleme)
-- [ ] `boot_ops.rs` — GRUB setup yeniden yazılacak (loopback ISO boot + dual initrd)
-- [ ] Frontend: Kullanıcı bilgileri adımı eklenmeli
-- [ ] Frontend: Kurulum akışı yeni mimariyle bağlanmalı
-- [ ] `lib.rs` — Yeni `start_installation` komutu (preseed akışı)
-
-## Mevcut Durum
-
-- Tauri v2 proje iskeleti kuruldu
-- Yönetici yetkisi kontrolü ve otomatik UAC yükseltme
-- UEFI/Legacy BIOS modu tespiti
-- Disk bölümlerini listeleme
-- ISO montaj/demontaj
-- Linux kernel (vmlinuz/initrd) arama (d-i + live paths)
-- ESP montaj, BCD kayıt oluşturma/temizleme
-- Otomatik reboot
-- 4 adımlı wizard arayüzü (ISO seç → Disk → Kurulum → Tamamlandı)
+- `overlay-template/init` ve `nextos-firstboot` **`include_str!` ile derlemeye gömülür**
+  (`initramfs_ops.rs`); yeni overlay dosyası eklemek için `stage_overlay_entries()`
+  güncellenmelidir. CRLF → LF dönüşümü otomatik yapılır.
+- `init` ilk açılışta yalnızca **stok ISO initrd'sinin busybox araçlarıyla** çalışır;
+  util-linux'a özgü sözdizimi ancak opsiyonel hızlı yol olarak kullanılabilir.
+- `nextos.conf` değerleri POSIX tek tırnakla quote'lanır (`sh_quote`), parola asla
+  düz metin yazılmaz (`NEXTOS_PASSWORD_HASH`, `$6$...`).
+- root.disk format kararı blkid ile değil, host'taki `.nextos-formatted` marker
+  dosyasıyla verilir (yanlış pozitif/negatif format felaketini önler).
+- ESP'de üzerine yazılan yabancı dosyalar (`BOOTX64.EFI`, mevcut `grub.cfg`'ler)
+  ilk kurulumda bir kez `.parkur-backup` uzantısıyla yedeklenir; uninstall
+  (`cleanup_esp_payload`) bunları geri yükler.
+- Legacy BIOS desteklenmez; BitLocker'lı hedef reddedilir; Fast Startup durumu
+  UI'da gösterilir (engellemez, uyarır).
+- Dev modunda self-elevation atlanır — terminali "Yönetici olarak çalıştır" ile açın.
 
 ## Derleme
 

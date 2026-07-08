@@ -572,6 +572,57 @@
       font-size: 12px;
     }
 
+    /* ── Modal ───────────────────────────────────────── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      width: 420px;
+      max-width: calc(100vw - 48px);
+      box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+      animation: pageIn 0.25s ease;
+    }
+
+    .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .modal p  { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; margin-bottom: 14px; }
+
+    .modal .drive-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      padding: 11px 14px;
+      margin-bottom: 8px;
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      background: var(--bg-inset);
+      color: var(--text);
+      font-size: 13.5px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      text-align: left;
+    }
+
+    .modal .drive-option:hover { border-color: var(--accent); background: var(--accent-dim); }
+    .modal .drive-option small { color: var(--text-faint); font-size: 11.5px; }
+
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
     /* ── Scrollbar ───────────────────────────────────── */
     ::-webkit-scrollbar { width: 9px; height: 9px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -661,6 +712,11 @@
               <div class="sys-item">
                 <label>Yönetici Yetkisi</label>
                 <span id="adminInfo">Denetleniyor...</span>
+              </div>
+              <div class="sys-item" style="grid-column: 1 / -1;">
+                <label>Hızlı Başlatma (Fast Startup)</label>
+                <span id="fastStartupInfo">Denetleniyor...</span>
+                <span class="hint" id="fastStartupHint"></span>
               </div>
             </div>
             <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border-soft); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -844,6 +900,22 @@
 
   </div>
 
+  <!-- ── Kaldırma diyaloğu ── -->
+  <div class="modal-backdrop" id="uninstallModal">
+    <div class="modal">
+      <h3>ParKur'u Kaldır</h3>
+      <p>
+        <code>NextOS\root.disk</code> dosyasını barındıran sürücüyü seçin.
+        Bu sürücüdeki NextOS dosyaları, ESP'deki önyükleyici ve UEFI girdisi kaldırılır;
+        yedeklenen orijinal önyükleyici dosyaları geri yüklenir.
+      </p>
+      <div id="uninstallDriveList"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost btn-small" onclick="closeUninstallModal()">Vazgeç</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const { invoke } = window.__TAURI__.core;
     const { open } = window.__TAURI__.dialog;
@@ -895,6 +967,21 @@
           state.bootMode === 'UEFI' ? 'var(--success)' : 'var(--error)';
       } catch (e) {
         document.getElementById('bootModeInfo').textContent = 'Bilinmiyor';
+      }
+      try {
+        const fastStartup = await invoke('check_fast_startup');
+        const info = document.getElementById('fastStartupInfo');
+        const hint = document.getElementById('fastStartupHint');
+        if (fastStartup) {
+          info.textContent = 'Açık — kapatılması önerilir';
+          info.style.color = 'var(--warning)';
+          hint.textContent = 'Hızlı Başlatma açıkken Pardus, NTFS diski yazılabilir açamayabilir. Denetim Masası → Güç Seçenekleri üzerinden kapatın.';
+        } else {
+          info.textContent = 'Kapalı';
+          info.style.color = 'var(--success)';
+        }
+      } catch (e) {
+        document.getElementById('fastStartupInfo').textContent = 'Bilinmiyor';
       }
     }
 
@@ -1064,26 +1151,42 @@
     }
 
     async function openUninstallPrompt() {
+      // window.prompt() is unreliable inside WebView2 — use an in-app modal.
       const status = document.getElementById('cleanupStatus');
+      const list = document.getElementById('uninstallDriveList');
       try {
         const partitions = await invoke('list_host_partitions');
         if (!partitions.length) {
           status.innerHTML = '<span style="color:var(--error);">NTFS diski bulunamadı.</span>';
           return;
         }
-        let target = null;
-        for (const p of partitions) {
-          if (target) break;
-          target = p;
-        }
-        const letters = partitions.map(p => p.drive_letter).join(', ');
-        const chosen = window.prompt(
-          'ParKur Kaldırma\n\nNextOS\\root.disk dosyasını barındıran sürücü harfini girin (' + letters + ')',
-          target.drive_letter
-        );
-        if (!chosen) return;
-        const drive = chosen.trim().replace(':', '').toUpperCase();
-        status.textContent = drive + ':\\ üzerinden kaldırılıyor...';
+        list.innerHTML = '';
+        partitions.forEach((p) => {
+          const btn = document.createElement('button');
+          btn.className = 'drive-option';
+          btn.innerHTML =
+            '<span><b>' + p.drive_letter + ':\\</b> &nbsp;' + p.label + '</span>' +
+            '<small>' + p.size_gb + ' GB &middot; boş ' + p.free_gb + ' GB</small>';
+          btn.addEventListener('click', () => runUninstall(p.drive_letter));
+          list.appendChild(btn);
+        });
+        document.getElementById('uninstallModal').classList.add('open');
+      } catch (e) {
+        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
+      }
+    }
+
+    function closeUninstallModal() {
+      document.getElementById('uninstallModal').classList.remove('open');
+    }
+
+    async function runUninstall(driveLetter) {
+      closeUninstallModal();
+      const status = document.getElementById('cleanupStatus');
+      const drive = String(driveLetter).trim().replace(':', '').toUpperCase();
+      status.textContent = drive + ':\\ üzerinden kaldırılıyor...';
+      status.style.color = 'var(--text-dim)';
+      try {
         await invoke('uninstall_nextos', { hostDriveLetter: drive });
         status.innerHTML = '<span style="color:var(--success);">&#10003; ParKur ' + drive + ':\\ üzerinden temiz şekilde kaldırıldı.</span>';
       } catch (e) {

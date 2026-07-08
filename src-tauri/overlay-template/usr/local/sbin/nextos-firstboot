@@ -5,11 +5,15 @@ export DEBIAN_FRONTEND=noninteractive
 
 CONF=/var/lib/nextos/nextos.conf
 COMPLETE=/var/lib/nextos/firstboot-complete
-HOOK_SRC=/var/lib/nextos/nextos-loop.hook
 LOG=/var/log/nextos-firstboot.log
 
 mkdir -p /var/log
 exec > >(tee -a "$LOG") 2>&1
+
+# With set -e a single failing command silently kills provisioning and the
+# system stays in its live-image state (passwordless live user, installer
+# icons, ...). Make any abort loud and traceable instead.
+trap 'echo "[nextos-firstboot] FATAL: aborted at line $LINENO (last command: $BASH_COMMAND)" >&2' ERR
 
 if [ -f "$COMPLETE" ]; then
     exit 0
@@ -23,7 +27,8 @@ fi
 . "$CONF"
 
 NEXTOS_USERNAME="${NEXTOS_USERNAME:-nextos}"
-NEXTOS_PASSWORD="${NEXTOS_PASSWORD:-nextos}"
+NEXTOS_PASSWORD_HASH="${NEXTOS_PASSWORD_HASH:-}"
+NEXTOS_PASSWORD="${NEXTOS_PASSWORD:-}"
 NEXTOS_HOSTNAME="${NEXTOS_HOSTNAME:-nextos}"
 NEXTOS_LOCALE="${NEXTOS_LOCALE:-en_US.UTF-8}"
 NEXTOS_TIMEZONE="${NEXTOS_TIMEZONE:-UTC}"
@@ -43,9 +48,25 @@ echo "[nextos-firstboot] creating user $NEXTOS_USERNAME"
 if ! id "$NEXTOS_USERNAME" >/dev/null 2>&1; then
     useradd -m -s /bin/bash -c "$NEXTOS_USERNAME" "$NEXTOS_USERNAME"
 fi
-echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD" | chpasswd
+# Preferred path: the installer ships a SHA-512 crypt hash, the plaintext
+# password never touches the disk. `chpasswd -e` applies the hash verbatim.
+if [ -n "$NEXTOS_PASSWORD_HASH" ]; then
+    echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD_HASH" | chpasswd -e
+elif [ -n "$NEXTOS_PASSWORD" ]; then
+    # Legacy fallback for configs written by older installer versions.
+    echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD" | chpasswd
+else
+    echo "[nextos-firstboot] ERROR: no password hash in config — account will require manual 'passwd'" >&2
+fi
 usermod -aG sudo "$NEXTOS_USERNAME" 2>/dev/null || true
 usermod -aG adm,audio,video,plugdev,netdev,bluetooth "$NEXTOS_USERNAME" 2>/dev/null || true
+
+# Disallow empty-password logins: the live image's PAM config may carry
+# "nullok", which would let leftover passwordless accounts straight in.
+for _pamf in /etc/pam.d/common-auth; do
+    [ -f "$_pamf" ] || continue
+    sed -i -E 's/[[:space:]]nullok(_secure)?\b//g' "$_pamf" || true
+done
 
 echo "[nextos-firstboot] hostname $NEXTOS_HOSTNAME"
 echo "$NEXTOS_HOSTNAME" > /etc/hostname
@@ -130,46 +151,35 @@ systemctl mask live-config-systemd.service 2>/dev/null || true
 systemctl mask live-tools.service 2>/dev/null || true
 
 rm -f /etc/sudoers.d/live /etc/sudoers.d/live-config /etc/sudoers.d/user /etc/sudoers.d/90-live
-for u in user live casper; do
+
+# Remove EVERY leftover live-image account, not just the Debian defaults.
+# Pardus ISOs bake in a passwordless "pardus" user — if it survives, the
+# system autologs into it and looks like it "installed without a password".
+LIVE_USER_NAMES="user live casper pardus debian ubuntu"
+for u in $LIVE_USER_NAMES; do
     if [ "$u" != "$NEXTOS_USERNAME" ] && id "$u" >/dev/null 2>&1; then
+        echo "[nextos-firstboot] removing live user $u"
         pkill -KILL -u "$u" 2>/dev/null || true
         userdel -r -f "$u" 2>/dev/null || true
     fi
 done
+# Catch-all: any remaining regular account (UID >= 1000) that came from the
+# squashfs and is not the user we just created gets removed as well.
+# Snapshot the names first — userdel rewrites /etc/passwd, so we must not
+# iterate over the file while deleting from it.
+LEFTOVER_USERS=$(awk -F: -v keep="$NEXTOS_USERNAME" \
+    '$3 >= 1000 && $1 != keep && $1 != "nobody" { print $1 }' /etc/passwd)
+for _name in $LEFTOVER_USERS; do
+    echo "[nextos-firstboot] removing leftover account $_name"
+    pkill -KILL -u "$_name" 2>/dev/null || true
+    userdel -r -f "$_name" 2>/dev/null || true
+done
+# Lock the root account's password (sudo via our user is the intended path);
+# keep it non-fatal in case passwd is missing.
+passwd -l root 2>/dev/null || true
 
 echo "[nextos-firstboot] installing persistent initramfs hooks"
-install -d -m 0755 /etc/initramfs-tools/scripts/local-top
-install -d -m 0755 /etc/initramfs-tools/scripts/init-bottom
 install -d -m 0755 /etc/initramfs-tools/hooks
-
-if [ -f "$HOOK_SRC" ]; then
-    install -m 0755 "$HOOK_SRC" /etc/initramfs-tools/scripts/local-top/nextos-loop
-fi
-
-cat > /etc/initramfs-tools/scripts/init-bottom/nextos-pivot <<'PIVOT'
-#!/bin/sh
-PREREQ=""
-prereqs() { echo "$PREREQ"; }
-case "$1" in
-    prereqs) prereqs; exit 0 ;;
-esac
-exit 0
-PIVOT
-chmod 0755 /etc/initramfs-tools/scripts/init-bottom/nextos-pivot
-
-cat > /etc/initramfs-tools/hooks/nextos-loop <<'HOOKDEP'
-#!/bin/sh
-PREREQ=""
-prereqs() { echo "$PREREQ"; }
-case "$1" in
-    prereqs) prereqs; exit 0 ;;
-esac
-. /usr/share/initramfs-tools/hook-functions
-manual_add_modules loop ext4 ntfs3 squashfs
-copy_exec /sbin/losetup /sbin
-copy_exec /sbin/blkid /sbin
-HOOKDEP
-chmod 0755 /etc/initramfs-tools/hooks/nextos-loop
 
 # This hook replaces the stock /init with the NextOS loop-mount init and
 # includes all required storage + filesystem modules on every initramfs rebuild.
@@ -267,6 +277,27 @@ if [ -n "$HOST_FSTAB_SRC" ]; then
     echo "$HOST_FSTAB_SRC  /host  ntfs3  defaults,noatime,nofail  0 0" >> /etc/fstab
 fi
 
+# Scrub every autologin rule the live image ships BEFORE writing ours —
+# a baked-in "autologin-user=pardus" would otherwise win (or race) and the
+# system would boot into the leftover passwordless live session.
+echo "[nextos-firstboot] scrubbing live-image autologin configuration"
+if [ -f /etc/lightdm/lightdm.conf ]; then
+    sed -i -E 's/^[[:space:]]*(autologin-user|autologin-user-timeout|autologin-guest)[[:space:]]*=.*//g' /etc/lightdm/lightdm.conf || true
+fi
+if [ -d /etc/lightdm/lightdm.conf.d ]; then
+    { grep -l 'autologin' /etc/lightdm/lightdm.conf.d/*.conf 2>/dev/null || true; } | while read -r _f; do
+        rm -f "$_f"
+    done
+fi
+if [ -f /etc/gdm3/daemon.conf ]; then
+    sed -i -E 's/^[[:space:]]*(AutomaticLogin|AutomaticLoginEnable|TimedLogin|TimedLoginEnable)[[:space:]]*=.*//g' /etc/gdm3/daemon.conf || true
+fi
+if [ -d /etc/sddm.conf.d ]; then
+    { grep -l -i 'autologin' /etc/sddm.conf.d/*.conf 2>/dev/null || true; } | while read -r _f; do
+        rm -f "$_f"
+    done
+fi
+
 DM_SET=""
 for dm in lightdm gdm3 sddm; do
     if [ -f "/lib/systemd/system/$dm.service" ] || [ -f "/etc/systemd/system/$dm.service" ]; then
@@ -278,10 +309,11 @@ for dm in lightdm gdm3 sddm; do
 done
 systemctl set-default graphical.target 2>/dev/null || true
 
+# "99-" prefix so our drop-in is parsed last and overrides anything left.
 case "$DM_SET" in
     lightdm)
         install -d -m 0755 /etc/lightdm/lightdm.conf.d
-        cat > /etc/lightdm/lightdm.conf.d/50-nextos.conf <<LCFG
+        cat > /etc/lightdm/lightdm.conf.d/99-nextos.conf <<LCFG
 [Seat:*]
 autologin-user=$NEXTOS_USERNAME
 autologin-user-timeout=0
@@ -298,7 +330,7 @@ GCFG
         ;;
     sddm)
         install -d -m 0755 /etc/sddm.conf.d
-        cat > /etc/sddm.conf.d/50-nextos.conf <<SCFG
+        cat > /etc/sddm.conf.d/99-nextos.conf <<SCFG
 [Autologin]
 User=$NEXTOS_USERNAME
 Session=plasma.desktop
@@ -324,6 +356,12 @@ if [ -d "$BOOT_DIR" ]; then
 fi
 
 shred -u "$CONF" 2>/dev/null || rm -f "$CONF"
+# Also destroy the copy on the Windows-visible NTFS volume — leaving it there
+# would expose the provisioning data (password hash) to anything on Windows.
+HOST_CONF="/host$(dirname "$NEXTOS_ROOT_DISK_PATH")/nextos.conf"
+if [ -f "$HOST_CONF" ]; then
+    shred -u "$HOST_CONF" 2>/dev/null || rm -f "$HOST_CONF"
+fi
 touch "$COMPLETE"
 
 systemctl disable nextos-firstboot.service 2>/dev/null || true

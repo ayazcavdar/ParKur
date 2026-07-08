@@ -9,6 +9,31 @@ pub const ESP_NEXTOS_DIR: &str = "EFI\\NextOS";
 pub const ESP_REMOVABLE_DIR: &str = "EFI\\BOOT";
 pub const ESP_REMOVABLE_FILE: &str = "BOOTX64.EFI";
 pub const NEXTOS_BCD_DESCRIPTION: &str = "NextOS";
+/// Suffix for pre-install backups of ESP files we overwrite (original
+/// fallback bootloader, foreign grub.cfg). Restored on uninstall.
+pub const ESP_BACKUP_SUFFIX: &str = ".parkur-backup";
+
+/// Back up `path` to `path + ESP_BACKUP_SUFFIX` before we overwrite it.
+/// The backup is only written once — on reinstall the existing backup still
+/// holds the true original, so it must not be clobbered with our own file.
+fn backup_esp_file_once(path: &str) {
+    let backup = format!("{}{}", path, ESP_BACKUP_SUFFIX);
+    if Path::new(path).exists() && !Path::new(&backup).exists() {
+        let _ = std::fs::copy(path, &backup);
+    }
+}
+
+/// Undo `backup_esp_file_once`: restore the original if a backup exists,
+/// otherwise remove the file we created (there was no original).
+fn restore_esp_file(path: &str) {
+    let backup = format!("{}{}", path, ESP_BACKUP_SUFFIX);
+    if Path::new(&backup).exists() {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::rename(&backup, path);
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum BootMode {
@@ -159,9 +184,12 @@ pub fn copy_efi_payload_from_iso(
     let esp_boot_dir = format!("{}:\\{}", esp_letter, ESP_REMOVABLE_DIR);
     let _ = std::fs::create_dir_all(&esp_boot_dir);
 
-    // Copy the chosen boot EFI as BOOTX64.EFI (the fallback entry)
+    // Copy the chosen boot EFI as BOOTX64.EFI (the fallback entry).
+    // The machine's original fallback bootloader is backed up first so
+    // uninstall can put it back.
     let primary_src = format!("{}\\{}", esp_nextos, boot_name);
     let removable_dest = format!("{}\\{}", esp_boot_dir, ESP_REMOVABLE_FILE);
+    backup_esp_file_once(&removable_dest);
     let _ = std::fs::copy(&primary_src, &removable_dest);
 
     // Copy grubx64.efi to EFI\BOOT\ so shim can find it when loaded from there
@@ -169,6 +197,7 @@ pub fn copy_efi_payload_from_iso(
         let grub_src = format!("{}\\grubx64.efi", esp_nextos);
         let grub_fallback = format!("{}\\grubx64.efi", esp_boot_dir);
         if Path::new(&grub_src).exists() {
+            backup_esp_file_once(&grub_fallback);
             let _ = std::fs::copy(&grub_src, &grub_fallback);
         }
     }
@@ -251,6 +280,9 @@ pub fn write_grub_cfg(esp_letter: &str, content: &str) -> Result<(), InstallerEr
         if let Some(parent) = Path::new(&dest).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        // A grub.cfg may belong to a real Debian/Pardus installation on this
+        // machine — keep the original so uninstall can restore it.
+        backup_esp_file_once(&dest);
         // Best-effort — non-fatal if a specific path fails
         let _ = std::fs::write(&dest, lf.as_bytes());
     }
@@ -359,39 +391,35 @@ pub fn cleanup_nextos_firmware_entries() -> Result<Vec<String>, InstallerError> 
 }
 
 pub fn cleanup_esp_payload(esp_letter: &str) -> Result<(), InstallerError> {
-    let dirs = [
-        format!("{}:\\{}", esp_letter, ESP_NEXTOS_DIR),
+    // Our own payload directory goes away entirely.
+    let nextos_dir = format!("{}:\\{}", esp_letter, ESP_NEXTOS_DIR);
+    if Path::new(&nextos_dir).exists() {
+        let _ = std::fs::remove_dir_all(&nextos_dir);
+    }
+
+    // Files we overwrote elsewhere: restore the pre-install backup when one
+    // exists, otherwise just delete what we created.
+    let overwritten = [
+        format!("{}:\\{}\\{}", esp_letter, ESP_REMOVABLE_DIR, ESP_REMOVABLE_FILE),
+        format!("{}:\\{}\\grubx64.efi", esp_letter, ESP_REMOVABLE_DIR),
+        format!("{}:\\{}\\grub.cfg", esp_letter, ESP_REMOVABLE_DIR),
+        format!("{}:\\EFI\\debian\\grub.cfg", esp_letter),
+        format!("{}:\\EFI\\pardus\\grub.cfg", esp_letter),
+        format!("{}:\\boot\\grub\\grub.cfg", esp_letter),
     ];
-    for d in &dirs {
-        if Path::new(d).exists() {
-            let script = format!(
-                "Remove-Item -Path '{}' -Recurse -Force -ErrorAction SilentlyContinue",
-                d
-            );
-            let _ = run_powershell(&script);
-        }
+    for path in &overwritten {
+        restore_esp_file(path);
     }
-    let removable = format!(
-        "{}:\\{}\\{}",
-        esp_letter, ESP_REMOVABLE_DIR, ESP_REMOVABLE_FILE
-    );
-    if Path::new(&removable).exists() {
-        let script = format!(
-            "Remove-Item -Path '{}' -Force -ErrorAction SilentlyContinue",
-            removable
-        );
-        let _ = run_powershell(&script);
-    }
-    let removable_cfg = format!(
-        "{}:\\{}\\grub.cfg",
-        esp_letter, ESP_REMOVABLE_DIR
-    );
-    if Path::new(&removable_cfg).exists() {
-        let script = format!(
-            "Remove-Item -Path '{}' -Force -ErrorAction SilentlyContinue",
-            removable_cfg
-        );
-        let _ = run_powershell(&script);
+
+    // Remove directories we may have created if they are now empty
+    // (remove_dir fails on non-empty dirs, which is exactly what we want).
+    for dir in [
+        format!("{}:\\EFI\\debian", esp_letter),
+        format!("{}:\\EFI\\pardus", esp_letter),
+        format!("{}:\\boot\\grub", esp_letter),
+        format!("{}:\\boot", esp_letter),
+    ] {
+        let _ = std::fs::remove_dir(&dir);
     }
     Ok(())
 }

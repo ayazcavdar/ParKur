@@ -270,32 +270,37 @@ pub fn read_squashfs_size(iso_drive_letter: &str, squashfs_rel: &str) -> Result<
 pub fn write_provisioning_config(
     layout: &HostImageLayout,
     username: &str,
-    password: &str,
+    password_hash: &str,
     hostname: &str,
     locale: &str,
     timezone: &str,
     host_serial: &str,
 ) -> Result<(), InstallerError> {
+    // The password is stored ONLY as a SHA-512 crypt hash ($6$...), never in
+    // plaintext, because this file sits on the NTFS volume readable from
+    // Windows. Values are single-quoted so that sourcing the file in a shell
+    // can never expand, split or execute anything inside them.
     let body = format!(
-        "NEXTOS_USERNAME={}\nNEXTOS_PASSWORD={}\nNEXTOS_HOSTNAME={}\nNEXTOS_LOCALE={}\nNEXTOS_TIMEZONE={}\nNEXTOS_HOST_SERIAL={}\nNEXTOS_ROOT_DISK_PATH={}\nNEXTOS_SQUASHFS_PATH={}\n",
-        escape_conf(username),
-        escape_conf(password),
-        escape_conf(hostname),
-        escape_conf(locale),
-        escape_conf(timezone),
-        escape_conf(host_serial),
-        layout.root_disk_unix_path,
-        layout.squashfs_unix_path,
+        "NEXTOS_USERNAME={}\nNEXTOS_PASSWORD_HASH={}\nNEXTOS_HOSTNAME={}\nNEXTOS_LOCALE={}\nNEXTOS_TIMEZONE={}\nNEXTOS_HOST_SERIAL={}\nNEXTOS_ROOT_DISK_PATH={}\nNEXTOS_SQUASHFS_PATH={}\n",
+        sh_quote(username),
+        sh_quote(password_hash),
+        sh_quote(hostname),
+        sh_quote(locale),
+        sh_quote(timezone),
+        sh_quote(host_serial),
+        sh_quote(&layout.root_disk_unix_path),
+        sh_quote(&layout.squashfs_unix_path),
     );
     std::fs::write(&layout.config, body.replace("\r\n", "\n").as_bytes())
         .map_err(|e| InstallerError::Io(format!("provisioning config write failed: {}", e)))?;
     Ok(())
 }
 
-fn escape_conf(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('\n', "")
-        .replace('\r', "")
+/// POSIX shell single-quoting: wrap in `'...'`, embedded `'` becomes `'\''`.
+/// Newlines are stripped (they would break the KEY=VALUE line format).
+fn sh_quote(s: &str) -> String {
+    let cleaned: String = s.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+    format!("'{}'", cleaned.replace('\'', "'\\''"))
 }
 
 pub fn remove_host_artifacts(layout: &HostImageLayout) {

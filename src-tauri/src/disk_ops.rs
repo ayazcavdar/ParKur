@@ -22,6 +22,7 @@ pub struct EnvProbe {
     pub secure_boot: bool,
     pub free_bytes: u64,
     pub volume_serial: String,
+    pub bitlocker: bool,
 }
 
 pub fn probe_environment(drive_letter: &str) -> Result<EnvProbe, InstallerError> {
@@ -35,12 +36,20 @@ pub fn probe_environment(drive_letter: &str) -> Result<EnvProbe, InstallerError>
         try {{ $sb = ((Get-SecureBootUEFI -Name 'SecureBoot' -ErrorAction Stop).Bytes[0] -eq 1) }} catch {{}}
         $free = [uint64](Get-Volume -DriveLetter '{letter}' -ErrorAction Stop).SizeRemaining
         $serial = (Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='{letter}:'" -ErrorAction Stop).VolumeSerialNumber
+        $bl = $false
+        try {{
+            $vol = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Filter "DriveLetter='{letter}:'" -ErrorAction Stop
+            if ($vol -and $vol.ProtectionStatus -eq 1) {{ $bl = $true }}
+        }} catch {{
+            try {{ $bl = ((Get-BitLockerVolume -MountPoint '{letter}:' -ErrorAction Stop).ProtectionStatus -eq 'On') }} catch {{}}
+        }}
         [PSCustomObject]@{{
             is_admin = [bool]$adm
             boot_mode = $bootMode
             secure_boot = [bool]$sb
             free_bytes = $free
             volume_serial = "$serial"
+            bitlocker = [bool]$bl
         }} | ConvertTo-Json -Compress
         "#,
         letter = letter
@@ -63,6 +72,21 @@ pub fn probe_environment(drive_letter: &str) -> Result<EnvProbe, InstallerError>
         )));
     }
     Ok(probe)
+}
+
+/// True when Windows Fast Startup (hiberboot) is enabled. Fast Startup leaves
+/// NTFS volumes in a "dirty" hibernated state that Linux refuses to mount
+/// read-write, so the user should disable it before installing.
+pub fn check_fast_startup_enabled() -> Result<bool, InstallerError> {
+    let output = run_powershell(
+        r#"
+        try {
+            $v = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name 'HiberbootEnabled' -ErrorAction Stop).HiberbootEnabled
+            if ($v -eq 1) { 'ON' } else { 'OFF' }
+        } catch { 'OFF' }
+        "#,
+    )?;
+    Ok(output.trim() == "ON")
 }
 
 pub fn check_admin_privileges() -> Result<bool, InstallerError> {
