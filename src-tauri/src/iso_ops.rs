@@ -1,11 +1,23 @@
 use crate::error::InstallerError;
+use crate::image_ops;
+use crate::squashfs_ops;
 use crate::util::run_powershell;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LinuxKernelInfo {
     pub kernel_path: String,
     pub initrd_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IsoLayoutInfo {
+    pub squashfs_compressed_mb: u64,
+    pub squashfs_uncompressed_mb: u64,
+    pub min_root_disk_gb: u32,
+    pub suggested_root_disk_gb: u32,
+    pub has_uefi_kernel: bool,
 }
 
 pub fn get_iso_size_mb(iso_path: &str) -> Result<u64, InstallerError> {
@@ -206,4 +218,37 @@ pub fn copy_iso_file(iso_drive_letter: &str, rel_path: &str, dest: &std::path::P
     std::fs::copy(&src, dest)
         .map_err(|e| InstallerError::Io(format!("file copy failed ({} -> {}): {}", src, dest.display(), e)))?;
     Ok(())
+}
+
+fn squashfs_host_path(iso_drive_letter: &str, squashfs_rel: &str) -> String {
+    format!(
+        "{}:\\{}",
+        iso_drive_letter.trim_end_matches(':'),
+        squashfs_rel.replace('/', "\\")
+    )
+}
+
+/// Mount the ISO briefly and derive sizing guidance from its squashfs payload.
+pub fn probe_iso_layout(iso_path: &str) -> Result<IsoLayoutInfo, InstallerError> {
+    let iso_drive = mount_iso(iso_path)?;
+    let result = (|| {
+        let has_uefi_kernel = find_linux_kernel(&iso_drive).is_ok();
+        let squashfs_rel = find_squashfs_path(&iso_drive)?;
+        let squashfs_path = squashfs_host_path(&iso_drive, &squashfs_rel);
+        let compressed = std::fs::metadata(&squashfs_path)
+            .map_err(|e| InstallerError::Io(format!("squashfs stat failed: {}", e)))?
+            .len();
+        let uncompressed = squashfs_ops::read_uncompressed_size(Path::new(&squashfs_path))?;
+        let min_gb = image_ops::min_root_disk_gb(uncompressed);
+        let suggested_gb = image_ops::suggested_root_disk_gb(min_gb);
+        Ok(IsoLayoutInfo {
+            squashfs_compressed_mb: compressed / (1024 * 1024),
+            squashfs_uncompressed_mb: uncompressed / (1024 * 1024),
+            min_root_disk_gb: min_gb,
+            suggested_root_disk_gb: suggested_gb,
+            has_uefi_kernel,
+        })
+    })();
+    let _ = unmount_iso(iso_path);
+    result
 }

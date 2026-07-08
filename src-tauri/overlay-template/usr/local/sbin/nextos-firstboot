@@ -49,9 +49,36 @@ if ! id "$NEXTOS_USERNAME" >/dev/null 2>&1; then
     useradd -m -s /bin/bash -c "$NEXTOS_USERNAME" "$NEXTOS_USERNAME"
 fi
 # Preferred path: the installer ships a SHA-512 crypt hash, the plaintext
-# password never touches the disk. `chpasswd -e` applies the hash verbatim.
+# password never touches the disk. `chpasswd -e` applies the hash verbatim;
+# fall back to `usermod -p` when chpasswd rejects the hash format.
+apply_password_hash() {
+    local user="$1" hash="$2"
+    if [ -z "$hash" ]; then
+        echo "[nextos-firstboot] ERROR: no password hash in config — set password manually with passwd" >&2
+        return 1
+    fi
+    if echo "$user:$hash" | chpasswd -e 2>/tmp/nextos-chpasswd.err; then
+        :
+    else
+        echo "[nextos-firstboot] chpasswd -e failed, trying usermod -p" >&2
+        cat /tmp/nextos-chpasswd.err >&2 2>/dev/null || true
+        if ! usermod -p "$hash" "$user" 2>/tmp/nextos-usermod.err; then
+            cat /tmp/nextos-usermod.err >&2 2>/dev/null || true
+            return 1
+        fi
+    fi
+    local shadow_field
+    shadow_field="$(getent shadow "$user" 2>/dev/null | cut -d: -f2)"
+    if [ -z "$shadow_field" ] || [ "$shadow_field" = '!' ] || [ "$shadow_field" = '*' ]; then
+        echo "[nextos-firstboot] ERROR: password not applied for $user (shadow entry invalid)" >&2
+        return 1
+    fi
+    echo "[nextos-firstboot] password set for $user"
+    return 0
+}
+
 if [ -n "$NEXTOS_PASSWORD_HASH" ]; then
-    echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD_HASH" | chpasswd -e
+    apply_password_hash "$NEXTOS_USERNAME" "$NEXTOS_PASSWORD_HASH" || true
 elif [ -n "$NEXTOS_PASSWORD" ]; then
     # Legacy fallback for configs written by older installer versions.
     echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD" | chpasswd

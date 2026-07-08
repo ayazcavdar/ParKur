@@ -10,6 +10,8 @@ pub struct HostCandidate {
     pub label: String,
     pub size_gb: f64,
     pub free_gb: f64,
+    pub bitlocker: bool,
+    pub has_nextos: bool,
 }
 
 /// Single-shot environment probe: gathers everything `start_installation`
@@ -89,6 +91,18 @@ pub fn check_fast_startup_enabled() -> Result<bool, InstallerError> {
     Ok(output.trim() == "ON")
 }
 
+pub fn detect_secure_boot() -> Result<bool, InstallerError> {
+    let output = run_powershell(
+        r#"
+        try {
+            $sb = (Get-SecureBootUEFI -Name 'SecureBoot' -ErrorAction Stop).Bytes[0]
+            if ($sb -eq 1) { 'ON' } else { 'OFF' }
+        } catch { 'OFF' }
+        "#,
+    )?;
+    Ok(output.trim() == "ON")
+}
+
 pub fn check_admin_privileges() -> Result<bool, InstallerError> {
     let output = run_powershell(
         "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
@@ -108,13 +122,24 @@ pub fn list_host_candidates() -> Result<Vec<HostCandidate>, InstallerError> {
                 $p = $_
                 $v = Get-Volume -Partition $p -ErrorAction SilentlyContinue
                 if ($v -and $p.DriveLetter -and $v.FileSystemType -eq 'NTFS') {
+                    $letter = "$($p.DriveLetter)"
+                    $bl = $false
+                    try {
+                        $ev = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Filter "DriveLetter='$letter`:'" -ErrorAction Stop
+                        if ($ev -and $ev.ProtectionStatus -eq 1) { $bl = $true }
+                    } catch {
+                        try { $bl = ((Get-BitLockerVolume -MountPoint "$letter`:" -ErrorAction Stop).ProtectionStatus -eq 'On') } catch {}
+                    }
+                    $hasNext = Test-Path "$letter`:\NextOS\root.disk"
                     $results += [PSCustomObject]@{
                         disk_number = [int]$disk.Number
                         partition_number = [int]$p.PartitionNumber
-                        drive_letter = "$($p.DriveLetter)"
+                        drive_letter = $letter
                         label = if ($v.FileSystemLabel) { $v.FileSystemLabel } else { "Local Disk" }
                         size_gb = [math]::Round($v.Size / 1GB, 1)
                         free_gb = [math]::Round($v.SizeRemaining / 1GB, 1)
+                        bitlocker = [bool]$bl
+                        has_nextos = [bool]$hasNext
                     }
                 }
             }

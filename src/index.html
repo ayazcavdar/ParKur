@@ -415,6 +415,12 @@
 
     .host-row:hover { border-color: var(--text-faint); }
 
+    .host-row.disabled {
+      opacity: 0.45;
+      pointer-events: none;
+      cursor: not-allowed;
+    }
+
     .host-row.selected {
       border-color: var(--accent);
       background: var(--accent-dim);
@@ -700,6 +706,7 @@
               <button class="btn btn-ghost btn-small" id="btnSelectIso" style="margin-bottom:1px;">Gözat</button>
             </div>
             <div id="isoStatus" style="font-size:12px; color:var(--text-dim);">Lütfen bir ISO dosyası seçin.</div>
+            <div id="isoLayoutInfo" style="display:none; margin-top:14px; padding:12px 14px; background:var(--surface-2); border-radius:8px; font-size:12px; color:var(--text-dim); line-height:1.6;"></div>
           </div>
 
           <div class="card">
@@ -712,6 +719,11 @@
               <div class="sys-item">
                 <label>Yönetici Yetkisi</label>
                 <span id="adminInfo">Denetleniyor...</span>
+              </div>
+              <div class="sys-item">
+                <label>Secure Boot</label>
+                <span id="secureBootInfo">Denetleniyor...</span>
+                <span class="hint" id="secureBootHint"></span>
               </div>
               <div class="sys-item" style="grid-column: 1 / -1;">
                 <label>Hızlı Başlatma (Fast Startup)</label>
@@ -821,16 +833,29 @@
             <div id="sizeSliderContainer" style="display:none; margin-top:20px; padding-top:18px; border-top:1px solid var(--border-soft);">
               <label style="font-size:13px; color:var(--text);">Pardus disk alanı (root.disk boyutu)</label>
               <div style="display:flex; align-items:center; gap:14px; margin-top:12px;">
-                <span style="font-size:12px; color:var(--text-faint); min-width:44px;" id="sliderMin">10 GB</span>
-                <input type="range" id="sizeSlider" min="10" max="100" value="20" step="1" oninput="updateSliderValue()" />
-                <span style="font-size:12px; color:var(--text-faint); min-width:48px; text-align:right;" id="sliderMax">100 GB</span>
+                <span style="font-size:12px; color:var(--text-faint); min-width:44px;" id="sliderMin">— GB</span>
+                <input type="range" id="sizeSlider" min="1" max="50" value="20" step="1" oninput="updateSliderValue()" />
+                <span style="font-size:12px; color:var(--text-faint); min-width:48px; text-align:right;" id="sliderMax">— GB</span>
               </div>
               <div class="size-display">
                 <span class="val" id="sliderValue">20</span><span class="unit">GB</span>
               </div>
               <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-faint); margin-top:2px;">
-                <span>En az 10 GB &middot; En fazla 100 GB</span>
+                <span id="sliderRangeHint">ISO analiz edildikten sonra sınırlar güncellenir</span>
                 <span id="sliderFreeInfo"></span>
+              </div>
+            </div>
+
+            <div class="info-box" style="margin-top:16px;">
+              <code>filesystem.squashfs</code> dosyası NTFS üzerinde kalıcı olarak durur (yalnızca <code>root.disk</code>
+              içindeki ext4 dosya sistemi ilk açılışta oluşturulur). Disk alanı = squashfs + root.disk + önyükleme dosyaları.
+            </div>
+
+            <div class="warning-box" id="nextosExistsWarning" style="display:none; margin-top:12px;">
+              <span style="font-size:16px;">&#9888;</span>
+              <div>
+                <b>Mevcut kurulum:</b> Bu sürücüde zaten <code>NextOS\root.disk</code> var.
+                Üzerine yazmadan önce ParKur'u Kaldır ile temizleyin.
               </div>
             </div>
 
@@ -839,7 +864,7 @@
               <div>
                 <b>Önemli:</b> Windows <b>Hızlı Başlatma</b> özelliğini kapatın
                 (Denetim Masası &rarr; Güç Seçenekleri &rarr; Güç düğmelerinin yapacaklarını seçin &rarr;
-                "Hızlı başlatmayı aç" işaretini kaldırın). Aksi halde Pardus, NTFS diski yazılabilir açamayabilir.
+                "Hızlı başlatmayı aç" işaretini kaldırın). Aksi halde kurulum başlamaz.
               </div>
             </div>
           </div>
@@ -926,8 +951,11 @@
       totalSteps: 5,
       isoPath: '',
       isoSizeMb: 0,
+      isoLayout: null,
       isAdmin: false,
       bootMode: '',
+      fastStartup: false,
+      secureBoot: false,
       partitions: [],
       selectedPartition: null,
       rootDiskGb: 20,
@@ -970,19 +998,57 @@
       }
       try {
         const fastStartup = await invoke('check_fast_startup');
+        state.fastStartup = !!fastStartup;
         const info = document.getElementById('fastStartupInfo');
         const hint = document.getElementById('fastStartupHint');
         if (fastStartup) {
-          info.textContent = 'Açık — kapatılması önerilir';
-          info.style.color = 'var(--warning)';
-          hint.textContent = 'Hızlı Başlatma açıkken Pardus, NTFS diski yazılabilir açamayabilir. Denetim Masası → Güç Seçenekleri üzerinden kapatın.';
+          info.textContent = 'Açık — kurulum engellendi';
+          info.style.color = 'var(--error)';
+          hint.textContent = 'Hızlı Başlatma açıkken Pardus NTFS diski yazılabilir açamaz. Denetim Masası → Güç Seçenekleri üzerinden kapatın.';
         } else {
           info.textContent = 'Kapalı';
           info.style.color = 'var(--success)';
+          hint.textContent = '';
         }
       } catch (e) {
         document.getElementById('fastStartupInfo').textContent = 'Bilinmiyor';
       }
+      try {
+        state.secureBoot = await invoke('detect_secure_boot');
+        const sbInfo = document.getElementById('secureBootInfo');
+        const sbHint = document.getElementById('secureBootHint');
+        if (state.secureBoot) {
+          sbInfo.textContent = 'Açık';
+          sbInfo.style.color = 'var(--warning)';
+          sbHint.textContent = 'Kurulum shim zincirini kopyalar; yine de bazı makinelerde Secure Boot elle kapatılmalıdır.';
+        } else {
+          sbInfo.textContent = 'Kapalı';
+          sbInfo.style.color = 'var(--success)';
+          sbHint.textContent = '';
+        }
+      } catch (e) {
+        document.getElementById('secureBootInfo').textContent = 'Bilinmiyor';
+      }
+      validateStep();
+    }
+
+    function requiredFreeGb() {
+      if (!state.isoLayout) return 12;
+      const sqGb = state.isoLayout.squashfs_compressed_mb / 1024;
+      return state.isoLayout.min_root_disk_gb + sqGb + 2.5;
+    }
+
+    function partitionUsable(p) {
+      if (p.bitlocker) return false;
+      if (p.has_nextos) return false;
+      return p.free_gb >= requiredFreeGb();
+    }
+
+    function computeMaxRootDiskGb(freeGb) {
+      if (!state.isoLayout) return Math.max(1, Math.floor(freeGb - 4));
+      const sqGb = state.isoLayout.squashfs_compressed_mb / 1024;
+      const reserved = sqGb + 0.5 + 2;
+      return Math.max(state.isoLayout.min_root_disk_gb, Math.floor(freeGb - reserved));
     }
 
     async function selectIso() {
@@ -995,12 +1061,30 @@
           state.isoPath = selected;
           document.getElementById('isoPath').value = state.isoPath;
           document.getElementById('isoStatus').innerHTML =
-            '<span style="color:var(--success);">&#10003; Seçildi: ' + getFileName(state.isoPath) + '</span>';
+            '<span style="color:var(--success);">&#10003; Seçildi: ' + getFileName(state.isoPath) + '</span> — ISO analiz ediliyor...';
+          state.isoLayout = null;
+          document.getElementById('isoLayoutInfo').style.display = 'none';
           try {
             state.isoSizeMb = await invoke('get_iso_size_mb', { path: state.isoPath });
-            document.getElementById('isoStatus').innerHTML +=
+            state.isoLayout = await invoke('probe_iso_layout', { path: state.isoPath });
+            const L = state.isoLayout;
+            document.getElementById('isoStatus').innerHTML =
+              '<span style="color:var(--success);">&#10003; Seçildi: ' + getFileName(state.isoPath) + '</span>' +
               ' <span style="color:var(--text-faint);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
-          } catch (e) { state.isoSizeMb = 3000; }
+            const layoutBox = document.getElementById('isoLayoutInfo');
+            layoutBox.style.display = 'block';
+            layoutBox.innerHTML =
+              '<b>ISO gereksinimleri</b><br>' +
+              'Sıkıştırılmış squashfs: <b>' + L.squashfs_compressed_mb + ' MB</b> &middot; ' +
+              'Açılmış dosya sistemi: <b>' + L.squashfs_uncompressed_mb + ' MB</b><br>' +
+              'Minimum root.disk: <b>' + L.min_root_disk_gb + ' GB</b> &middot; Önerilen: <b>' + L.suggested_root_disk_gb + ' GB</b>' +
+              (L.has_uefi_kernel ? '' : '<br><span style="color:var(--error);">Uyarı: ISO içinde UEFI çekirdeği bulunamadı.</span>');
+            if (state.selectedPartition) selectPartition(state.partitions.indexOf(state.selectedPartition));
+          } catch (e) {
+            state.isoLayout = null;
+            document.getElementById('isoStatus').innerHTML =
+              '<span style="color:var(--error);">ISO analizi başarısız: ' + e + '</span>';
+          }
           validateStep();
         }
       } catch (err) {
@@ -1081,46 +1165,60 @@
           return;
         }
         let html = '<div class="part-head"><span></span><span>Sürücü</span><span>Etiket</span><span style="text-align:right;">Toplam</span><span style="text-align:right;">Boş</span></div>';
+        const needGb = requiredFreeGb();
         partitions.forEach((p, i) => {
-          const enough = p.free_gb >= 12;
-          html += '<div class="host-row" id="hostRow' + i + '" onclick="selectPartition(' + i + ')">';
+          const usable = partitionUsable(p);
+          let note = '';
+          if (p.bitlocker) note = 'BitLocker';
+          else if (p.has_nextos) note = 'NextOS var';
+          else if (!usable) note = 'Yetersiz alan';
+          const enough = usable;
+          html += '<div class="host-row' + (usable ? '' : ' disabled') + '" id="hostRow' + i + '" onclick="selectPartition(' + i + ')">';
           html += '<span class="radio"></span>';
-          html += '<span class="drive-letter">' + p.drive_letter + ':\\</span>';
+          html += '<span class="drive-letter">' + p.drive_letter + ':\\' + (note ? ' <small style="color:var(--warning);">(' + note + ')</small>' : '') + '</span>';
           html += '<span style="color:var(--text-dim);">' + p.label + '</span>';
           html += '<span class="num">' + p.size_gb + ' GB</span>';
           html += '<span class="num" style="color:' + (enough ? 'var(--success)' : 'var(--error)') + ';">' + p.free_gb + ' GB</span>';
           html += '</div>';
         });
-        container.innerHTML = html;
+        container.innerHTML = html + '<p style="font-size:11px; color:var(--text-faint); margin-top:10px;">Gerekli boş alan (yaklaşık): <b>' + needGb.toFixed(1) + ' GB</b></p>';
         state.partitions = partitions;
-        if (partitions.length > 0) selectPartition(0);
+        const firstUsable = partitions.findIndex(partitionUsable);
+        if (firstUsable >= 0) selectPartition(firstUsable);
+        else state.selectedPartition = null;
       } catch (err) {
         container.innerHTML = '<p style="color:var(--error); font-size:13px;">Hata: ' + err + '</p>';
       }
     }
 
     function selectPartition(index) {
-      state.selectedPartition = state.partitions[index];
+      const p = state.partitions[index];
+      if (!partitionUsable(p)) return;
+      state.selectedPartition = p;
       document.querySelectorAll('.host-row').forEach(function(el, i) {
         el.classList.toggle('selected', i === index);
       });
+      const warn = document.getElementById('nextosExistsWarning');
+      if (warn) warn.style.display = p.has_nextos ? 'flex' : 'none';
       const container = document.getElementById('sizeSliderContainer');
       const slider = document.getElementById('sizeSlider');
-      const p = state.partitions[index];
-      const maxGbCapByFree = Math.floor(p.free_gb - 4);
-      const maxGb = Math.min(100, Math.max(10, maxGbCapByFree));
-      const minGb = 10;
+      const minGb = state.isoLayout ? state.isoLayout.min_root_disk_gb : 10;
+      const suggestedGb = state.isoLayout ? state.isoLayout.suggested_root_disk_gb : 20;
+      const maxGb = computeMaxRootDiskGb(p.free_gb);
       if (maxGb >= minGb) {
         slider.min = minGb;
         slider.max = maxGb;
-        slider.value = Math.min(20, maxGb);
+        slider.value = Math.min(Math.max(suggestedGb, minGb), maxGb);
         document.getElementById('sliderMin').textContent = minGb + ' GB';
         document.getElementById('sliderMax').textContent = maxGb + ' GB';
+        document.getElementById('sliderRangeHint').textContent =
+          'Minimum ISO\'dan hesaplanır · üst sınır boş alana göre';
         document.getElementById('sliderFreeInfo').textContent = p.drive_letter + ':\\ üzerinde boş alan: ' + p.free_gb + ' GB';
         updateSliderValue();
         container.style.display = 'block';
       } else {
         container.style.display = 'none';
+        state.selectedPartition = null;
       }
       updateStepper();
     }
@@ -1232,7 +1330,10 @@
       if (state.currentStep === 1) {
         btnStart.style.display = 'inline-flex';
         btnStart.innerHTML = 'İleri &rarr;';
-        btnStart.disabled = !(state.isoPath && state.isAdmin && state.bootMode === 'UEFI');
+        btnStart.disabled = !(
+          state.isoPath && state.isoLayout && state.isoLayout.has_uefi_kernel &&
+          state.isAdmin && state.bootMode === 'UEFI' && !state.fastStartup
+        );
         btnBack.style.display = 'none';
       } else if (state.currentStep === 2) {
         btnStart.style.display = 'inline-flex';
@@ -1242,7 +1343,7 @@
       } else if (state.currentStep === 3) {
         btnStart.style.display = 'inline-flex';
         btnStart.innerHTML = 'Kurulumu Başlat';
-        btnStart.disabled = !state.selectedPartition;
+        btnStart.disabled = !state.selectedPartition || !partitionUsable(state.selectedPartition);
         btnBack.style.display = 'inline-flex';
       } else {
         btnStart.style.display = 'none';
@@ -1253,11 +1354,14 @@
     function validateStep() {
       const btnStart = document.getElementById('btnStart');
       if (state.currentStep === 1) {
-        btnStart.disabled = !(state.isoPath && state.isAdmin && state.bootMode === 'UEFI');
+        btnStart.disabled = !(
+          state.isoPath && state.isoLayout && state.isoLayout.has_uefi_kernel &&
+          state.isAdmin && state.bootMode === 'UEFI' && !state.fastStartup
+        );
       } else if (state.currentStep === 2) {
         btnStart.disabled = !validateUserInfo();
       } else if (state.currentStep === 3) {
-        btnStart.disabled = !state.selectedPartition;
+        btnStart.disabled = !state.selectedPartition || !partitionUsable(state.selectedPartition);
       }
     }
 

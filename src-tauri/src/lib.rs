@@ -4,11 +4,13 @@ mod error;
 mod image_ops;
 mod initramfs_ops;
 mod iso_ops;
+mod squashfs_ops;
 mod util;
 
 use crate::error::InstallerError;
 use serde::{Deserialize, Serialize};
 use sha_crypt::{PasswordHasher, ShaCrypt};
+use std::path::Path;
 use tauri::Emitter;
 #[cfg(debug_assertions)]
 use tauri::Manager;
@@ -62,6 +64,16 @@ async fn list_host_partitions() -> Result<Vec<disk_ops::HostCandidate>, Installe
 #[tauri::command]
 async fn get_iso_size_mb(path: String) -> Result<u64, InstallerError> {
     iso_ops::get_iso_size_mb(&path)
+}
+
+#[tauri::command]
+async fn probe_iso_layout(path: String) -> Result<iso_ops::IsoLayoutInfo, InstallerError> {
+    iso_ops::probe_iso_layout(&path)
+}
+
+#[tauri::command]
+async fn detect_secure_boot() -> Result<bool, InstallerError> {
+    disk_ops::detect_secure_boot()
 }
 
 fn validate_user_input(
@@ -139,23 +151,25 @@ async fn start_installation(
     }
     if probe.bitlocker {
         return Err(InstallerError::DiskOperation(format!(
-            "Drive {}:\\ is BitLocker-encrypted. Linux cannot read encrypted NTFS volumes — \
-             decrypt the drive or choose another one.",
+            "{}:\\ sürücüsü BitLocker ile şifreli. Linux şifreli NTFS birimlerini okuyamaz — \
+             şifreyi çözün veya başka sürücü seçin.",
+            host_drive_letter.trim_end_matches(':')
+        )));
+    }
+    if disk_ops::check_fast_startup_enabled()? {
+        return Err(InstallerError::DiskOperation(
+            "Hızlı Başlatma (Fast Startup) açık. Kurulumdan önce Denetim Masası → Güç Seçenekleri \
+             → \"Güç düğmelerinin yapacaklarını seçin\" üzerinden kapatın.".into(),
+        ));
+    }
+    if image_ops::host_has_nextos_install(&host_drive_letter) {
+        return Err(InstallerError::DiskOperation(format!(
+            "{}:\\ sürücüsünde zaten NextOS kurulumu var. Yeniden kurmak için önce kaldırın veya başka sürücü seçin.",
             host_drive_letter.trim_end_matches(':')
         )));
     }
     validate_user_input(&user_name, &password, &hostname)?;
     let password_hash = hash_password_sha512(&password)?;
-
-    if root_disk_size_gb < image_ops::MIN_ROOT_DISK_GB
-        || root_disk_size_gb > image_ops::MAX_ROOT_DISK_GB
-    {
-        return Err(InstallerError::InvalidInput(format!(
-            "root.disk size must be between {} and {} GB.",
-            image_ops::MIN_ROOT_DISK_GB,
-            image_ops::MAX_ROOT_DISK_GB
-        )));
-    }
 
     emit(&app, "iso", 8, "Mounting source ISO");
     let iso_drive = iso_ops::mount_iso(&iso_path)?;
@@ -181,17 +195,34 @@ async fn start_installation(
             return Err(e);
         }
     };
+    let squashfs_host = format!(
+        "{}:\\{}",
+        iso_drive.trim_end_matches(':'),
+        squashfs_rel.replace('/', "\\")
+    );
+    let squashfs_uncompressed = match squashfs_ops::read_uncompressed_size(Path::new(&squashfs_host)) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = iso_ops::unmount_iso(&iso_path);
+            return Err(e);
+        }
+    };
     let root_disk_bytes: u64 = (root_disk_size_gb as u64) * BYTES_PER_GB;
+    if let Err(e) = image_ops::validate_root_disk_size(root_disk_bytes, squashfs_uncompressed) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        return Err(e);
+    }
 
     emit(
         &app,
         "verify",
         12,
         &format!(
-            "Validating capacity on {}:\\ for {} GB root.disk + {} MB squashfs",
+            "Validating capacity on {}:\\ for {} GB root.disk + {} MB squashfs ({} MB extracted)",
             host_drive_letter,
             root_disk_size_gb,
-            squashfs_bytes / (1024 * 1024)
+            squashfs_bytes / (1024 * 1024),
+            squashfs_uncompressed / (1024 * 1024)
         ),
     );
 
@@ -206,6 +237,10 @@ async fn start_installation(
         return Err(e);
     }
     if let Err(e) = image_ops::ensure_host_dir(&layout) {
+        let _ = iso_ops::unmount_iso(&iso_path);
+        return Err(e);
+    }
+    if let Err(e) = boot_ops::backup_firmware_boot_timeout_to_host(&layout.host_dir) {
         let _ = iso_ops::unmount_iso(&iso_path);
         return Err(e);
     }
@@ -390,6 +425,7 @@ async fn uninstall_nextos(host_drive_letter: String) -> Result<(), InstallerErro
         let _ = boot_ops::cleanup_esp_payload(&esp_letter);
     }
     let layout = image_ops::build_layout(&host_drive_letter);
+    let _ = boot_ops::restore_firmware_boot_timeout_from_host(&layout.host_dir);
     image_ops::remove_host_artifacts(&layout);
     Ok(())
 }
@@ -450,6 +486,8 @@ pub fn run() {
             check_fast_startup,
             list_host_partitions,
             get_iso_size_mb,
+            probe_iso_layout,
+            detect_secure_boot,
             cleanup_old_boot_entries,
             start_installation,
             uninstall_nextos,

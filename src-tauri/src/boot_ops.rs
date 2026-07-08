@@ -1,4 +1,5 @@
 use crate::error::InstallerError;
+use crate::image_ops::BCD_TIMEOUT_BACKUP_FILENAME;
 use crate::util::{extract_first_guid, run_powershell, CREATE_NO_WINDOW};
 use serde::{Deserialize, Serialize};
 use std::os::windows::process::CommandExt;
@@ -351,6 +352,51 @@ fn run_bcdedit(args: &[&str]) -> Result<String, InstallerError> {
         )));
     }
     Ok(stdout)
+}
+
+/// Remember the firmware boot-menu timeout before we change it globally.
+pub fn backup_firmware_boot_timeout_to_host(host_dir: &Path) -> Result<(), InstallerError> {
+    let backup_path = host_dir.join(BCD_TIMEOUT_BACKUP_FILENAME);
+    if backup_path.exists() {
+        return Ok(());
+    }
+    if let Some(timeout) = read_firmware_boot_timeout() {
+        std::fs::write(&backup_path, timeout).map_err(|e| {
+            InstallerError::BootloaderConfig(format!("bcd timeout backup write failed: {}", e))
+        })?;
+    }
+    Ok(())
+}
+
+pub fn restore_firmware_boot_timeout_from_host(host_dir: &Path) -> Result<(), InstallerError> {
+    let backup_path = host_dir.join(BCD_TIMEOUT_BACKUP_FILENAME);
+    if !backup_path.exists() {
+        return Ok(());
+    }
+    let timeout = std::fs::read_to_string(&backup_path).map_err(|e| {
+        InstallerError::BootloaderConfig(format!("bcd timeout backup read failed: {}", e))
+    })?;
+    let timeout = timeout.trim();
+    if !timeout.is_empty() {
+        run_bcdedit(&["/timeout", timeout])?;
+    }
+    let _ = std::fs::remove_file(backup_path);
+    Ok(())
+}
+
+fn read_firmware_boot_timeout() -> Option<String> {
+    let output = run_bcdedit(&["/enum", "{bootmgr}"]).ok()?;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.to_ascii_lowercase().starts_with("timeout") {
+            if let Some(val) = trimmed.split_whitespace().last() {
+                if val.chars().all(|c| c.is_ascii_digit()) {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn cleanup_nextos_firmware_entries() -> Result<Vec<String>, InstallerError> {

@@ -9,9 +9,67 @@ pub const NEXTOS_HOST_DIR_NAME: &str = "NextOS";
 pub const ROOT_DISK_FILENAME: &str = "root.disk";
 pub const SQUASHFS_FILENAME: &str = "filesystem.squashfs";
 pub const PROVISIONING_FILENAME: &str = "nextos.conf";
-pub const MIN_ROOT_DISK_GB: u32 = 10;
-pub const MAX_ROOT_DISK_GB: u32 = 100;
+/// Extra ext4 space beyond the extracted rootfs (journal, metadata, apt updates).
+pub const ROOT_DISK_GROWTH_HEADROOM_BYTES: u64 = 1024 * 1024 * 1024;
+/// Boot payload (kernel + initrd + overlay) reserved when computing max slider.
+pub const HOST_BOOT_PAYLOAD_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 pub const SAFETY_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const BYTES_PER_GB: u64 = 1024 * 1024 * 1024;
+
+/// Minimum `root.disk` bytes for a given squashfs uncompressed payload.
+pub fn min_root_disk_bytes(squashfs_uncompressed_bytes: u64) -> u64 {
+    squashfs_uncompressed_bytes
+        .saturating_mul(110)
+        .saturating_div(100)
+        .saturating_add(ROOT_DISK_GROWTH_HEADROOM_BYTES)
+}
+
+pub fn min_root_disk_gb(squashfs_uncompressed_bytes: u64) -> u32 {
+    let bytes = min_root_disk_bytes(squashfs_uncompressed_bytes);
+    ((bytes + BYTES_PER_GB - 1) / BYTES_PER_GB).max(1) as u32
+}
+
+pub fn suggested_root_disk_gb(min_gb: u32) -> u32 {
+    let bump = (min_gb / 4).max(2);
+    min_gb.saturating_add(bump)
+}
+
+pub fn validate_root_disk_size(
+    root_disk_bytes: u64,
+    squashfs_uncompressed_bytes: u64,
+) -> Result<(), InstallerError> {
+    let min_bytes = min_root_disk_bytes(squashfs_uncompressed_bytes);
+    if root_disk_bytes < min_bytes {
+        let min_gb = min_root_disk_gb(squashfs_uncompressed_bytes);
+        let need_mb = min_bytes / (1024 * 1024);
+        return Err(InstallerError::InvalidInput(format!(
+            "root.disk is too small — need at least {} GB ({} MB) for this ISO's extracted filesystem.",
+            min_gb, need_mb
+        )));
+    }
+    Ok(())
+}
+
+pub fn max_root_disk_gb_for_free(
+    free_bytes: u64,
+    squashfs_compressed_bytes: u64,
+) -> u32 {
+    let reserved = squashfs_compressed_bytes
+        .saturating_add(HOST_BOOT_PAYLOAD_HEADROOM_BYTES)
+        .saturating_add(SAFETY_HEADROOM_BYTES);
+    if free_bytes <= reserved {
+        return 0;
+    }
+    let available = free_bytes - reserved;
+    (available / BYTES_PER_GB).max(0) as u32
+}
+
+pub fn host_has_nextos_install(drive_letter: &str) -> bool {
+    let letter = drive_letter.trim_end_matches(':');
+    std::path::Path::new(&format!("{}:\\NextOS\\root.disk", letter)).exists()
+}
+
+pub const BCD_TIMEOUT_BACKUP_FILENAME: &str = ".parkur-bcd-timeout";
 
 pub const HOST_BOOT_DIR_NAME: &str = "boot";
 pub const HOST_KERNEL_FILENAME: &str = "vmlinuz";

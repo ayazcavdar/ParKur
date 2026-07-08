@@ -12,7 +12,10 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
 
 1. **Windows tarafı (kurulum):**
    - Ortam denetimi tek PowerShell probe ile: admin, UEFI, Secure Boot, boş alan,
-     volume serial, **BitLocker** (şifreliyse kurulum reddedilir)
+     volume serial, **BitLocker** (şifreliyse kurulum reddedilir), **Fast Startup**
+     (açıksa kurulum reddedilir), mevcut `NextOS\` kurulumu (üzerine yazma reddedilir)
+   - ISO seçildiğinde squashfs **açılmış boyutu** `backhand` ile okunur; `root.disk`
+     minimumu buna göre hesaplanır (üst sınır yalnızca boş alana bağlıdır)
    - `X:\NextOS\root.disk` `fsutil` ile prealloc edilir (baş/son sıfırlanır),
      `filesystem.squashfs` + kernel + initrd ISO'dan kopyalanır
    - `overlay.cpio.gz` Rust içinde native üretilir (cpio newc + gzip) — içinde
@@ -29,7 +32,7 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
      `root.disk`'i loop'a bağlar, ilk açılışta squashfs içinden chroot'la
      `mkfs.ext4` + `unsquashfs` çalıştırır, `switch_root` yapar
    - `nextos-firstboot.service`: kullanıcı oluşturma (parola **SHA-512 crypt hash**
-     olarak gelir, `chpasswd -e` ile uygulanır), hostname/locale/timezone/klavye,
+     olarak gelir, `chpasswd -e` + `usermod -p` yedek yolu ile uygulanır), hostname/locale/timezone/klavye,
      canlı imaj kullanıcılarının (`pardus`, `user`, `live`, UID≥1000 artıkları) ve
      autologin config'lerinin temizliği (oturum açarken parola sorulur), Calamares/live paketlerinin purge edilmesi,
      kalıcı initramfs hook'ları (kernel güncellemeleri `NextOS\boot`'a senkronlanır),
@@ -44,8 +47,9 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
   - `main.rs` — Giriş noktası, UAC self-elevation (yalnızca release build)
   - `disk_ops.rs` — Ortam probe'u (admin/UEFI/SecureBoot/BitLocker/serial/boş alan),
     NTFS bölüm listeleme, Fast Startup denetimi
-  - `iso_ops.rs` — ISO mount/dismount, kernel/initrd/squashfs arama
-  - `image_ops.rs` — root.disk prealloc, squashfs kopyalama (progress'li),
+  - `iso_ops.rs` — ISO mount/dismount, kernel/initrd/squashfs arama, `probe_iso_layout`
+  - `squashfs_ops.rs` — squashfs açılmış boyut okuma (`backhand`)
+  - `image_ops.rs` — root.disk prealloc, dinamik min/max boyut, squashfs kopyalama (progress'li),
     provisioning config yazımı (tek tırnak quote'lu, yalnızca hash)
   - `initramfs_ops.rs` — Overlay initrd üretici (cpio newc + gzip, saf Rust)
   - `boot_ops.rs` — ESP mount, EFI payload + grub.cfg (yedekli yazım), BCD/UEFI
@@ -70,8 +74,8 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
 - ESP'de üzerine yazılan yabancı dosyalar (`BOOTX64.EFI`, mevcut `grub.cfg`'ler)
   ilk kurulumda bir kez `.parkur-backup` uzantısıyla yedeklenir; uninstall
   (`cleanup_esp_payload`) bunları geri yükler.
-- Legacy BIOS desteklenmez; BitLocker'lı hedef reddedilir; Fast Startup durumu
-  UI'da gösterilir (engellemez, uyarır).
+- Legacy BIOS desteklenmez; BitLocker'lı hedef reddedilir; Fast Startup açıksa kurulum
+  reddedilir; BCD boot-menu timeout'u `.parkur-bcd-timeout` ile yedeklenir (uninstall geri yükler).
 - Dev modunda self-elevation atlanır — terminali "Yönetici olarak çalıştır" ile açın.
 
 ## Derleme
