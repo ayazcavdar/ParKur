@@ -277,9 +277,9 @@ if [ -n "$HOST_FSTAB_SRC" ]; then
     echo "$HOST_FSTAB_SRC  /host  ntfs3  defaults,noatime,nofail  0 0" >> /etc/fstab
 fi
 
-# Scrub every autologin rule the live image ships BEFORE writing ours —
-# a baked-in "autologin-user=pardus" would otherwise win (or race) and the
-# system would boot into the leftover passwordless live session.
+# Scrub every autologin rule the live image ships — we do NOT configure
+# autologin for the new user; the display manager must prompt for a password
+# on every boot.
 echo "[nextos-firstboot] scrubbing live-image autologin configuration"
 if [ -f /etc/lightdm/lightdm.conf ]; then
     sed -i -E 's/^[[:space:]]*(autologin-user|autologin-user-timeout|autologin-guest)[[:space:]]*=.*//g' /etc/lightdm/lightdm.conf || true
@@ -308,36 +308,7 @@ for dm in lightdm gdm3 sddm; do
     fi
 done
 systemctl set-default graphical.target 2>/dev/null || true
-
-# "99-" prefix so our drop-in is parsed last and overrides anything left.
-case "$DM_SET" in
-    lightdm)
-        install -d -m 0755 /etc/lightdm/lightdm.conf.d
-        cat > /etc/lightdm/lightdm.conf.d/99-nextos.conf <<LCFG
-[Seat:*]
-autologin-user=$NEXTOS_USERNAME
-autologin-user-timeout=0
-LCFG
-        ;;
-    gdm3)
-        install -d -m 0755 /etc/gdm3
-        cat > /etc/gdm3/daemon.conf <<GCFG
-[daemon]
-AutomaticLoginEnable=true
-AutomaticLogin=$NEXTOS_USERNAME
-WaylandEnable=false
-GCFG
-        ;;
-    sddm)
-        install -d -m 0755 /etc/sddm.conf.d
-        cat > /etc/sddm.conf.d/99-nextos.conf <<SCFG
-[Autologin]
-User=$NEXTOS_USERNAME
-Session=plasma.desktop
-Relogin=false
-SCFG
-        ;;
-esac
+echo "[nextos-firstboot] display manager $DM_SET enabled (password required at login)"
 
 # Re-enable automatic initramfs updates for the system's future life,
 # then generate it exactly once for the running kernel only.

@@ -31,7 +31,7 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
    - `nextos-firstboot.service`: kullanıcı oluşturma (parola **SHA-512 crypt hash**
      olarak gelir, `chpasswd -e` ile uygulanır), hostname/locale/timezone/klavye,
      canlı imaj kullanıcılarının (`pardus`, `user`, `live`, UID≥1000 artıkları) ve
-     autologin config'lerinin temizliği, Calamares/live paketlerinin purge edilmesi,
+     autologin config'lerinin temizliği (oturum açarken parola sorulur), Calamares/live paketlerinin purge edilmesi,
      kalıcı initramfs hook'ları (kernel güncellemeleri `NextOS\boot`'a senkronlanır),
      provisioning config'in (host taraf dahil) imha edilmesi, reboot
 

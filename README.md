@@ -53,7 +53,8 @@ Everything lives in a `NextOS\` folder on the chosen NTFS drive:
 - `nextos-firstboot.service` provisions the system: creates the user (password applied
   from the SHA-512 hash via `chpasswd -e`), hostname, locale, timezone, keyboard layout;
   **removes all live-image users** (`pardus`, `user`, `live`, … any leftover UID ≥ 1000)
-  and their autologin configs; purges live/installer packages (Calamares etc.);
+  and their autologin configs (login screen asks for a password each boot);
+  purges live/installer packages (Calamares etc.);
   installs initramfs hooks so kernel updates keep working; then reboots into the
   finished system
 
