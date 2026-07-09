@@ -19,35 +19,51 @@ const MODE_EXEC: u32 = 0o100755;
 
 /// Build the standalone NextOS overlay initrd (gzipped cpio newc archive).
 ///
-/// GRUB loads this as a SECOND initrd after the stock ISO initrd
-/// (`initrd /NextOS/boot/initrd.img /NextOS/boot/overlay.cpio.gz`).
-/// The kernel extracts both archives in order, so files here (notably
-/// `/init`) replace their counterparts from the stock live-boot initrd.
-/// Keeping the overlay separate avoids fragile manual concatenation with
-/// the (zstd-compressed) stock initrd and lets us iterate on the overlay
-/// without touching the big stock image.
-pub fn build_overlay_cpio_gz(dest: &Path) -> Result<(), InstallerError> {
+/// `install_password` is embedded as `var/lib/nextos/install.pass` inside the
+/// cpio (mode 0600). It never touches `nextos.conf` on NTFS; firstboot applies
+/// it with plain `chpasswd`, verifies the shadow entry, then shreds the file.
+pub fn build_overlay_cpio_gz(dest: &Path, install_password: &str) -> Result<(), InstallerError> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             InstallerError::InitramfsBuild(format!("overlay dest dir create failed: {}", e))
         })?;
     }
-    let entries = stage_overlay_entries();
+    let entries = stage_overlay_entries(install_password);
     let cpio_raw = build_cpio_newc(&entries)?;
     gzip_native(&cpio_raw, dest)
 }
 
-fn stage_overlay_entries() -> Vec<OverlayEntry> {
+const MODE_FILE_SECRET: u32 = 0o100600;
+
+fn stage_overlay_entries(install_password: &str) -> Vec<OverlayEntry> {
     let mut v: Vec<OverlayEntry> = Vec::new();
 
     // Directory entries (must come before files inside them)
-    for d in &["usr", "usr/local", "usr/local/sbin"] {
+    for d in &[
+        "usr",
+        "usr/local",
+        "usr/local/sbin",
+        "var",
+        "var/lib",
+        "var/lib/nextos",
+    ] {
         v.push(OverlayEntry {
             path: d,
             mode: MODE_DIR,
             content: String::new(),
         });
     }
+
+    // One-time install password — read by firstboot, never written to nextos.conf.
+    let pass_clean: String = install_password
+        .chars()
+        .filter(|c| *c != '\n' && *c != '\r')
+        .collect();
+    v.push(OverlayEntry {
+        path: "var/lib/nextos/install.pass",
+        mode: MODE_FILE_SECRET,
+        content: pass_clean,
+    });
 
     // /init — overwrites the live-boot init in the stock Pardus initrd so that
     // our loop-mount logic runs instead of live-boot's CD/USB discovery.

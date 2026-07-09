@@ -387,6 +387,18 @@
     .sys-item label { margin-bottom: 4px; }
     .sys-item span { font-size: 14px; font-weight: 600; }
 
+    .sys-item-action {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .sys-item-action .sys-item-main { flex: 1; min-width: 0; }
+    .sys-item-action .sys-fix-btn { flex-shrink: 0; margin-top: 2px; }
+
+    .sys-item-wide { grid-column: 1 / -1; }
+
     /* ── Partition rows ──────────────────────────────── */
     .part-head {
       display: grid;
@@ -720,15 +732,21 @@
                 <label>Yönetici Yetkisi</label>
                 <span id="adminInfo">Denetleniyor...</span>
               </div>
-              <div class="sys-item">
-                <label>Secure Boot</label>
-                <span id="secureBootInfo">Denetleniyor...</span>
-                <span class="hint" id="secureBootHint"></span>
+              <div class="sys-item sys-item-action">
+                <div class="sys-item-main">
+                  <label>Secure Boot</label>
+                  <span id="secureBootInfo">Denetleniyor...</span>
+                  <span class="hint" id="secureBootHint"></span>
+                </div>
+                <button type="button" class="btn btn-ghost btn-small sys-fix-btn" id="btnFixSecureBoot" onclick="fixSecureBoot()" style="display:none;">Kapat</button>
               </div>
-              <div class="sys-item" style="grid-column: 1 / -1;">
-                <label>Hızlı Başlatma (Fast Startup)</label>
-                <span id="fastStartupInfo">Denetleniyor...</span>
-                <span class="hint" id="fastStartupHint"></span>
+              <div class="sys-item sys-item-action sys-item-wide">
+                <div class="sys-item-main">
+                  <label>Hızlı Başlatma (Fast Startup)</label>
+                  <span id="fastStartupInfo">Denetleniyor...</span>
+                  <span class="hint" id="fastStartupHint"></span>
+                </div>
+                <button type="button" class="btn btn-ghost btn-small sys-fix-btn" id="btnFixFastStartup" onclick="fixFastStartup()" style="display:none;">Kapat</button>
               </div>
             </div>
             <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border-soft); display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
@@ -862,9 +880,7 @@
             <div class="warning-box">
               <span style="font-size:16px;">&#9888;</span>
               <div>
-                <b>Önemli:</b> Windows <b>Hızlı Başlatma</b> özelliğini kapatın
-                (Denetim Masası &rarr; Güç Seçenekleri &rarr; Güç düğmelerinin yapacaklarını seçin &rarr;
-                "Hızlı başlatmayı aç" işaretini kaldırın). Aksi halde kurulum başlamaz.
+                <b>Hızlı Başlatma:</b> Açıksa kurulum başlamaz — Sistem Durumu kartındaki <b>Kapat</b> düğmesi ayarı otomatik kapatır.
               </div>
             </div>
           </div>
@@ -998,38 +1014,105 @@
       }
       try {
         const fastStartup = await invoke('check_fast_startup');
-        state.fastStartup = !!fastStartup;
-        const info = document.getElementById('fastStartupInfo');
-        const hint = document.getElementById('fastStartupHint');
-        if (fastStartup) {
-          info.textContent = 'Açık — kurulum engellendi';
-          info.style.color = 'var(--error)';
-          hint.textContent = 'Hızlı Başlatma açıkken Pardus NTFS diski yazılabilir açamaz. Denetim Masası → Güç Seçenekleri üzerinden kapatın.';
-        } else {
-          info.textContent = 'Kapalı';
-          info.style.color = 'var(--success)';
-          hint.textContent = '';
-        }
+        updateFastStartupUI(!!fastStartup);
       } catch (e) {
         document.getElementById('fastStartupInfo').textContent = 'Bilinmiyor';
       }
       try {
         state.secureBoot = await invoke('detect_secure_boot');
-        const sbInfo = document.getElementById('secureBootInfo');
-        const sbHint = document.getElementById('secureBootHint');
-        if (state.secureBoot) {
-          sbInfo.textContent = 'Açık';
-          sbInfo.style.color = 'var(--warning)';
-          sbHint.textContent = 'Kurulum shim zincirini kopyalar; yine de bazı makinelerde Secure Boot elle kapatılmalıdır.';
-        } else {
-          sbInfo.textContent = 'Kapalı';
-          sbInfo.style.color = 'var(--success)';
-          sbHint.textContent = '';
-        }
+        updateSecureBootUI(state.secureBoot);
       } catch (e) {
         document.getElementById('secureBootInfo').textContent = 'Bilinmiyor';
       }
       validateStep();
+    }
+
+    function updateFastStartupUI(enabled) {
+      state.fastStartup = !!enabled;
+      const info = document.getElementById('fastStartupInfo');
+      const hint = document.getElementById('fastStartupHint');
+      const btn = document.getElementById('btnFixFastStartup');
+      if (enabled) {
+        info.textContent = 'Açık — kurulum engellendi';
+        info.style.color = 'var(--error)';
+        hint.textContent = 'Yanındaki Kapat düğmesi ayarı otomatik kapatır.';
+        btn.style.display = state.isAdmin ? 'inline-flex' : 'none';
+        btn.disabled = !state.isAdmin;
+      } else {
+        info.textContent = 'Kapalı';
+        info.style.color = 'var(--success)';
+        hint.textContent = '';
+        btn.style.display = 'none';
+      }
+    }
+
+    function updateSecureBootUI(enabled) {
+      state.secureBoot = !!enabled;
+      const sbInfo = document.getElementById('secureBootInfo');
+      const sbHint = document.getElementById('secureBootHint');
+      const btn = document.getElementById('btnFixSecureBoot');
+      if (enabled) {
+        sbInfo.textContent = 'Açık';
+        sbInfo.style.color = 'var(--warning)';
+        sbHint.textContent = 'Yanındaki Kapat düğmesi mümkünse BIOS üzerinden kapatır; gerekirse UEFI menüsüne götürür.';
+        btn.style.display = state.isAdmin ? 'inline-flex' : 'none';
+        btn.disabled = !state.isAdmin;
+      } else {
+        sbInfo.textContent = 'Kapalı';
+        sbInfo.style.color = 'var(--success)';
+        sbHint.textContent = '';
+        btn.style.display = 'none';
+      }
+    }
+
+    async function fixFastStartup() {
+      const btn = document.getElementById('btnFixFastStartup');
+      const hint = document.getElementById('fastStartupHint');
+      if (!state.isAdmin) {
+        hint.innerHTML = '<span style="color:var(--error);">Yönetici yetkisi gerekir.</span>';
+        return;
+      }
+      btn.disabled = true;
+      hint.textContent = 'Kapatılıyor...';
+      hint.style.color = 'var(--text-dim)';
+      try {
+        await invoke('disable_fast_startup');
+        updateFastStartupUI(false);
+        validateStep();
+      } catch (e) {
+        hint.innerHTML = '<span style="color:var(--error);">' + e + '</span>';
+        btn.disabled = false;
+      }
+    }
+
+    async function fixSecureBoot() {
+      const btn = document.getElementById('btnFixSecureBoot');
+      const hint = document.getElementById('secureBootHint');
+      if (!state.isAdmin) {
+        hint.innerHTML = '<span style="color:var(--error);">Yönetici yetkisi gerekir.</span>';
+        return;
+      }
+      if (!confirm('Secure Boot kapatılacak. Gerekirse bilgisayar UEFI ayarlarına yeniden başlatılır. Devam edilsin mi?')) {
+        return;
+      }
+      btn.disabled = true;
+      hint.textContent = 'Ayarlanıyor...';
+      hint.style.color = 'var(--text-dim)';
+      try {
+        const result = await invoke('fix_secure_boot');
+        if (result.status === 'already_off') {
+          updateSecureBootUI(false);
+        } else {
+          hint.innerHTML = '<span style="color:var(--warning);">' + result.message + '</span>';
+          if (result.reboot_seconds) {
+            hint.innerHTML += ' <span style="color:var(--text-faint);">(' + result.reboot_seconds + ' sn)</span>';
+          }
+        }
+        validateStep();
+      } catch (e) {
+        hint.innerHTML = '<span style="color:var(--error);">' + e + '</span>';
+        btn.disabled = false;
+      }
     }
 
     function requiredFreeGb() {
@@ -1139,8 +1222,9 @@
         document.getElementById('resultIcon').style.color = 'var(--success)';
         document.getElementById('resultTitle').textContent = 'Kurulum Tamamlandı';
         document.getElementById('resultMessage').innerHTML =
-          'Önyükleme menüsüne "NextOS" girdisi eklendi. Yeniden başlattığınızda Pardus otomatik kurulacak ve ' +
-          'kullanıcı hesabınızla hazır hale gelecektir. NVRAM sıfırlanırsa <code>\\EFI\\BOOT\\BOOTX64.EFI</code> ' +
+          'Önyükleme menüsüne "NextOS" girdisi eklendi. İlk açılışta kurulum birkaç dakika sürebilir; ' +
+          'ardından oturum açarken kurulumda girdiğiniz <b>kullanıcı adı</b> (<code>' +
+          state.userName + '</code>) ve parolayı kullanın. NVRAM sıfırlanırsa <code>\\EFI\\BOOT\\BOOTX64.EFI</code> ' +
           'yedek önyükleyicisi devreye girer.';
       } catch (error) {
         addLog('error', String(error));

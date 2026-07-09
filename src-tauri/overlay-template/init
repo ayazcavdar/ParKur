@@ -393,6 +393,10 @@ if [ ! -f "/newroot/.nextos-bootstrapped" ]; then
         cp "/host$NEXTOS_DIR_PATH/nextos.conf" /newroot/var/lib/nextos/nextos.conf
         chmod 600 /newroot/var/lib/nextos/nextos.conf
     fi
+    if [ -f "/var/lib/nextos/install.pass" ]; then
+        cp /var/lib/nextos/install.pass /newroot/var/lib/nextos/install.pass
+        chmod 600 /newroot/var/lib/nextos/install.pass
+    fi
 
     # Stage nextos-firstboot from initramfs overlay
     if [ -f "/usr/local/sbin/nextos-firstboot" ]; then

@@ -24,16 +24,44 @@ if [ ! -f "$CONF" ]; then
     exit 1
 fi
 
-. "$CONF"
+# Never `. "$CONF"` — SHA-512 crypt hashes contain `$` bytes that must not be
+# re-expanded by the shell. Parse KEY='value' lines literally instead.
+read_conf_value() {
+    local key="$1" line val
+    line=$(grep -m1 "^${key}=" "$CONF" 2>/dev/null) || return 1
+    val="${line#*=}"
+    case "$val" in
+        \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    printf '%s' "$val"
+}
 
-NEXTOS_USERNAME="${NEXTOS_USERNAME:-nextos}"
-NEXTOS_PASSWORD_HASH="${NEXTOS_PASSWORD_HASH:-}"
-NEXTOS_PASSWORD="${NEXTOS_PASSWORD:-}"
-NEXTOS_HOSTNAME="${NEXTOS_HOSTNAME:-nextos}"
-NEXTOS_LOCALE="${NEXTOS_LOCALE:-en_US.UTF-8}"
-NEXTOS_TIMEZONE="${NEXTOS_TIMEZONE:-UTC}"
-NEXTOS_ROOT_DISK_PATH="${NEXTOS_ROOT_DISK_PATH:-/NextOS/root.disk}"
-NEXTOS_HOST_SERIAL="${NEXTOS_HOST_SERIAL:-}"
+NEXTOS_USERNAME=$(read_conf_value NEXTOS_USERNAME 2>/dev/null || echo nextos)
+NEXTOS_PASSWORD_HASH=$(read_conf_value NEXTOS_PASSWORD_HASH 2>/dev/null || true)
+NEXTOS_PASSWORD=$(read_conf_value NEXTOS_PASSWORD 2>/dev/null || true)
+NEXTOS_HOSTNAME=$(read_conf_value NEXTOS_HOSTNAME 2>/dev/null || echo nextos)
+NEXTOS_LOCALE=$(read_conf_value NEXTOS_LOCALE 2>/dev/null || echo en_US.UTF-8)
+NEXTOS_TIMEZONE=$(read_conf_value NEXTOS_TIMEZONE 2>/dev/null || echo UTC)
+NEXTOS_ROOT_DISK_PATH=$(read_conf_value NEXTOS_ROOT_DISK_PATH 2>/dev/null || echo /NextOS/root.disk)
+NEXTOS_HOST_SERIAL=$(read_conf_value NEXTOS_HOST_SERIAL 2>/dev/null || true)
+
+PASS_FILE=/var/lib/nextos/install.pass
+INSTALL_PASS=""
+if [ -f "$PASS_FILE" ]; then
+    INSTALL_PASS=$(cat "$PASS_FILE")
+fi
+
+# Keyboard layout derived from the locale (needed before login greeter too).
+case "$NEXTOS_LOCALE" in
+    tr_*) KB_LAYOUT="tr" ;;
+    de_*) KB_LAYOUT="de" ;;
+    fr_*) KB_LAYOUT="fr" ;;
+    es_*) KB_LAYOUT="es" ;;
+    ru_*) KB_LAYOUT="ru" ;;
+    ja_*) KB_LAYOUT="jp" ;;
+    en_GB*) KB_LAYOUT="gb" ;;
+    *)    KB_LAYOUT="us" ;;
+esac
 
 # Strip live-installer shortcuts from /etc/skel BEFORE creating the user,
 # otherwise useradd -m copies them straight onto the new user's Desktop
@@ -44,47 +72,76 @@ for _skeldir in /etc/skel/Desktop /etc/skel/.config/autostart; do
     find "$_skeldir" -maxdepth 1 -iname '*install*'   -delete 2>/dev/null || true
 done
 
+echo "[nextos-firstboot] removing live-image accounts before creating $NEXTOS_USERNAME"
+LIVE_USER_NAMES="user live casper pardus debian ubuntu"
+for u in $LIVE_USER_NAMES; do
+    if id "$u" >/dev/null 2>&1; then
+        echo "[nextos-firstboot] removing live user $u"
+        pkill -KILL -u "$u" 2>/dev/null || true
+        userdel -r -f "$u" 2>/dev/null || true
+    fi
+done
+LEFTOVER_USERS=$(awk -F: -v keep="$NEXTOS_USERNAME" \
+    '$3 >= 1000 && $1 != keep && $1 != "nobody" { print $1 }' /etc/passwd)
+for _name in $LEFTOVER_USERS; do
+    echo "[nextos-firstboot] removing leftover account $_name"
+    pkill -KILL -u "$_name" 2>/dev/null || true
+    userdel -r -f "$_name" 2>/dev/null || true
+done
+
 echo "[nextos-firstboot] creating user $NEXTOS_USERNAME"
-if ! id "$NEXTOS_USERNAME" >/dev/null 2>&1; then
-    useradd -m -s /bin/bash -c "$NEXTOS_USERNAME" "$NEXTOS_USERNAME"
-fi
-# Preferred path: the installer ships a SHA-512 crypt hash, the plaintext
-# password never touches the disk. `chpasswd -e` applies the hash verbatim;
-# fall back to `usermod -p` when chpasswd rejects the hash format.
+userdel -r -f "$NEXTOS_USERNAME" 2>/dev/null || true
+useradd -m -s /bin/bash -c "$NEXTOS_USERNAME" "$NEXTOS_USERNAME"
+
+shadow_password_ok() {
+    local user="$1"
+    local field
+    field="$(getent shadow "$user" 2>/dev/null | cut -d: -f2)"
+    [ -n "$field" ] && [ "$field" != '!' ] && [ "$field" != '*' ]
+}
+
 apply_password_hash() {
     local user="$1" hash="$2"
     if [ -z "$hash" ]; then
-        echo "[nextos-firstboot] ERROR: no password hash in config — set password manually with passwd" >&2
         return 1
     fi
-    if echo "$user:$hash" | chpasswd -e 2>/tmp/nextos-chpasswd.err; then
+    if printf '%s:%s\n' "$user" "$hash" | chpasswd -e 2>/tmp/nextos-chpasswd.err; then
         :
     else
         echo "[nextos-firstboot] chpasswd -e failed, trying usermod -p" >&2
         cat /tmp/nextos-chpasswd.err >&2 2>/dev/null || true
-        if ! usermod -p "$hash" "$user" 2>/tmp/nextos-usermod.err; then
+        usermod -p "$hash" "$user" 2>/tmp/nextos-usermod.err || {
             cat /tmp/nextos-usermod.err >&2 2>/dev/null || true
             return 1
-        fi
+        }
     fi
-    local shadow_field
-    shadow_field="$(getent shadow "$user" 2>/dev/null | cut -d: -f2)"
-    if [ -z "$shadow_field" ] || [ "$shadow_field" = '!' ] || [ "$shadow_field" = '*' ]; then
-        echo "[nextos-firstboot] ERROR: password not applied for $user (shadow entry invalid)" >&2
-        return 1
-    fi
-    echo "[nextos-firstboot] password set for $user"
-    return 0
+    shadow_password_ok "$user"
 }
 
-if [ -n "$NEXTOS_PASSWORD_HASH" ]; then
-    apply_password_hash "$NEXTOS_USERNAME" "$NEXTOS_PASSWORD_HASH" || true
-elif [ -n "$NEXTOS_PASSWORD" ]; then
-    # Legacy fallback for configs written by older installer versions.
-    echo "$NEXTOS_USERNAME:$NEXTOS_PASSWORD" | chpasswd
-else
-    echo "[nextos-firstboot] ERROR: no password hash in config — account will require manual 'passwd'" >&2
+PASSWORD_OK=0
+if [ -n "$INSTALL_PASS" ]; then
+    echo "[nextos-firstboot] applying install password from initrd"
+    if printf '%s:%s\n' "$NEXTOS_USERNAME" "$INSTALL_PASS" | chpasswd; then
+        shadow_password_ok "$NEXTOS_USERNAME" && PASSWORD_OK=1
+    fi
 fi
+if [ "$PASSWORD_OK" -ne 1 ] && [ -n "$NEXTOS_PASSWORD_HASH" ]; then
+    echo "[nextos-firstboot] applying password hash from config"
+    apply_password_hash "$NEXTOS_USERNAME" "$NEXTOS_PASSWORD_HASH" && PASSWORD_OK=1
+fi
+if [ "$PASSWORD_OK" -ne 1 ] && [ -n "$NEXTOS_PASSWORD" ]; then
+    echo "[nextos-firstboot] applying legacy plaintext password from config"
+    printf '%s:%s\n' "$NEXTOS_USERNAME" "$NEXTOS_PASSWORD" | chpasswd
+    shadow_password_ok "$NEXTOS_USERNAME" && PASSWORD_OK=1
+fi
+if [ "$PASSWORD_OK" -ne 1 ]; then
+    echo "[nextos-firstboot] FATAL: could not set password for $NEXTOS_USERNAME" >&2
+    echo "[nextos-firstboot] check $LOG and /tmp/nextos-chpasswd.err" >&2
+    exit 1
+fi
+echo "[nextos-firstboot] password set for $NEXTOS_USERNAME"
+shred -u "$PASS_FILE" 2>/dev/null || rm -f "$PASS_FILE"
+
 usermod -aG sudo "$NEXTOS_USERNAME" 2>/dev/null || true
 usermod -aG adm,audio,video,plugdev,netdev,bluetooth "$NEXTOS_USERNAME" 2>/dev/null || true
 
@@ -114,17 +171,6 @@ if [ -f /etc/locale.gen ]; then
     update-locale LANG="$NEXTOS_LOCALE" 2>/dev/null || true
 fi
 
-# Keyboard layout derived from the locale (no extra user input needed).
-case "$NEXTOS_LOCALE" in
-    tr_*) KB_LAYOUT="tr" ;;
-    de_*) KB_LAYOUT="de" ;;
-    fr_*) KB_LAYOUT="fr" ;;
-    es_*) KB_LAYOUT="es" ;;
-    ru_*) KB_LAYOUT="ru" ;;
-    ja_*) KB_LAYOUT="jp" ;;
-    en_GB*) KB_LAYOUT="gb" ;;
-    *)    KB_LAYOUT="us" ;;
-esac
 echo "[nextos-firstboot] keyboard layout $KB_LAYOUT"
 cat > /etc/default/keyboard <<KBD
 XKBMODEL="pc105"
@@ -135,6 +181,7 @@ BACKSPACE="guess"
 KBD
 dpkg-reconfigure -f noninteractive keyboard-configuration 2>/dev/null || true
 setupcon --save 2>/dev/null || true
+localectl set-x11-keymap "$KB_LAYOUT" 2>/dev/null || true
 
 # Performance: the purges below fire the update-initramfs trigger once per
 # apt/dpkg run. Disable automatic regeneration for the whole provisioning
@@ -179,30 +226,7 @@ systemctl mask live-tools.service 2>/dev/null || true
 
 rm -f /etc/sudoers.d/live /etc/sudoers.d/live-config /etc/sudoers.d/user /etc/sudoers.d/90-live
 
-# Remove EVERY leftover live-image account, not just the Debian defaults.
-# Pardus ISOs bake in a passwordless "pardus" user — if it survives, the
-# system autologs into it and looks like it "installed without a password".
-LIVE_USER_NAMES="user live casper pardus debian ubuntu"
-for u in $LIVE_USER_NAMES; do
-    if [ "$u" != "$NEXTOS_USERNAME" ] && id "$u" >/dev/null 2>&1; then
-        echo "[nextos-firstboot] removing live user $u"
-        pkill -KILL -u "$u" 2>/dev/null || true
-        userdel -r -f "$u" 2>/dev/null || true
-    fi
-done
-# Catch-all: any remaining regular account (UID >= 1000) that came from the
-# squashfs and is not the user we just created gets removed as well.
-# Snapshot the names first — userdel rewrites /etc/passwd, so we must not
-# iterate over the file while deleting from it.
-LEFTOVER_USERS=$(awk -F: -v keep="$NEXTOS_USERNAME" \
-    '$3 >= 1000 && $1 != keep && $1 != "nobody" { print $1 }' /etc/passwd)
-for _name in $LEFTOVER_USERS; do
-    echo "[nextos-firstboot] removing leftover account $_name"
-    pkill -KILL -u "$_name" 2>/dev/null || true
-    userdel -r -f "$_name" 2>/dev/null || true
-done
-# Lock the root account's password (sudo via our user is the intended path);
-# keep it non-fatal in case passwd is missing.
+# Lock the root account's password (sudo via our user is the intended path).
 passwd -l root 2>/dev/null || true
 
 echo "[nextos-firstboot] installing persistent initramfs hooks"
@@ -310,6 +334,15 @@ fi
 echo "[nextos-firstboot] scrubbing live-image autologin configuration"
 if [ -f /etc/lightdm/lightdm.conf ]; then
     sed -i -E 's/^[[:space:]]*(autologin-user|autologin-user-timeout|autologin-guest)[[:space:]]*=.*//g' /etc/lightdm/lightdm.conf || true
+fi
+mkdir -p /etc/lightdm/lightdm.conf.d
+cat > /etc/lightdm/lightdm.conf.d/50-nextos-keyboard.conf <<KBDCONF
+[Seat:*]
+greeter-setup-script=/bin/sh -c 'setxkbmap ${KB_LAYOUT} 2>/dev/null || true'
+KBDCONF
+if [ -f /etc/lightdm/lightdm-gtk-greeter.conf ]; then
+    sed -i '/^#\?keyboard=/d' /etc/lightdm/lightdm-gtk-greeter.conf || true
+    echo "keyboard=${KB_LAYOUT}" >> /etc/lightdm/lightdm-gtk-greeter.conf
 fi
 if [ -d /etc/lightdm/lightdm.conf.d ]; then
     { grep -l 'autologin' /etc/lightdm/lightdm.conf.d/*.conf 2>/dev/null || true; } | while read -r _f; do

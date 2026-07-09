@@ -19,7 +19,8 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
    - `X:\NextOS\root.disk` `fsutil` ile prealloc edilir (baş/son sıfırlanır),
      `filesystem.squashfs` + kernel + initrd ISO'dan kopyalanır
    - `overlay.cpio.gz` Rust içinde native üretilir (cpio newc + gzip) — içinde
-     yalnızca `init` ve `nextos-firstboot` vardır
+     `init`, `nextos-firstboot` ve tek kullanımlık `install.pass` (düz parola;
+     firstboot'ta `chpasswd` ile uygulanır, sonra imha edilir) vardır
    - Shim/GRUB zinciri ESP'ye kopyalanır (`EFI\NextOS` + `EFI\BOOT` fallback),
      grub.cfg tüm olası GRUB prefix'lerine yazılır; **üzerine yazılan her dosya
      önce `.parkur-backup` olarak yedeklenir** (uninstall geri yükler)
@@ -31,8 +32,9 @@ Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan aç
      serial ile blkid'in 64-bit NTFS serial'ı asla eşleşmez), rw mount eder,
      `root.disk`'i loop'a bağlar, ilk açılışta squashfs içinden chroot'la
      `mkfs.ext4` + `unsquashfs` çalıştırır, `switch_root` yapar
-   - `nextos-firstboot.service`: kullanıcı oluşturma (parola **SHA-512 crypt hash**
-     olarak gelir, `chpasswd -e` + `usermod -p` yedek yolu ile uygulanır), hostname/locale/timezone/klavye,
+   - `nextos-firstboot.service`: kullanıcı oluşturma (önce canlı `pardus` vb.
+     silinir, hesap sıfırdan açılır; parola initrd'deki `install.pass` ile
+     `chpasswd` uygulanır, hash yedek yoludur), hostname/locale/timezone/klavye,
      canlı imaj kullanıcılarının (`pardus`, `user`, `live`, UID≥1000 artıkları) ve
      autologin config'lerinin temizliği (oturum açarken parola sorulur), Calamares/live paketlerinin purge edilmesi,
      kalıcı initramfs hook'ları (kernel güncellemeleri `NextOS\boot`'a senkronlanır),

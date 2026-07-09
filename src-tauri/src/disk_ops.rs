@@ -103,6 +103,97 @@ pub fn detect_secure_boot() -> Result<bool, InstallerError> {
     Ok(output.trim() == "ON")
 }
 
+/// Turn off Windows Fast Startup (hiberboot) so Linux can mount NTFS read-write.
+pub fn disable_fast_startup() -> Result<(), InstallerError> {
+    if !check_admin_privileges()? {
+        return Err(InstallerError::PermissionDenied(
+            "Hızlı Başlatmayı kapatmak için yönetici yetkisi gerekir.".into(),
+        ));
+    }
+    run_powershell(
+        r#"
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name 'HiberbootEnabled' -Value 0 -Type DWord -Force
+        try { powercfg /hibernate off 2>$null | Out-Null } catch {}
+        'OK'
+        "#,
+    )?;
+    if check_fast_startup_enabled()? {
+        return Err(InstallerError::DiskOperation(
+            "Hızlı Başlatma kapatılamadı. Denetim Masası → Güç Seçenekleri üzerinden deneyin.".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SecureBootFixResult {
+    pub status: String,
+    pub message: String,
+    pub reboot_seconds: Option<u32>,
+    pub vendor: Option<String>,
+}
+
+/// Best-effort Secure Boot disable: OEM BIOS APIs when available, otherwise
+/// reboot straight into UEFI firmware settings (`shutdown /r /fw`).
+pub fn fix_secure_boot() -> Result<SecureBootFixResult, InstallerError> {
+    if !check_admin_privileges()? {
+        return Err(InstallerError::PermissionDenied(
+            "Secure Boot ayarını değiştirmek için yönetici yetkisi gerekir.".into(),
+        ));
+    }
+    let script = r#"
+        function Out-Result($status, $message, $seconds, $vendor) {
+            [PSCustomObject]@{
+                status = $status
+                message = $message
+                reboot_seconds = $seconds
+                vendor = $vendor
+            } | ConvertTo-Json -Compress
+        }
+
+        $sbOn = $false
+        try {
+            $sb = (Get-SecureBootUEFI -Name 'SecureBoot' -ErrorAction Stop).Bytes[0]
+            $sbOn = ($sb -eq 1)
+        } catch {
+            Out-Result 'already_off' 'Secure Boot zaten kapalı veya bu sistemde desteklenmiyor.' $null $null
+            exit
+        }
+        if (-not $sbOn) {
+            Out-Result 'already_off' 'Secure Boot zaten kapalı.' $null $null
+            exit
+        }
+
+        # Lenovo ThinkPad / IdeaPad — BIOS supervisor parolası yoksa genelde tek tıkla uygulanır.
+        try {
+            $iface = Get-WmiObject -Namespace root\wmi -Class Lenovo_SetBiosSetting -ErrorAction Stop
+            $null = $iface.SetBiosSetting('SecureBoot,Disable', '', 'us', 'ascii', '')
+            $null = $iface.SaveBiosSettings()
+            shutdown /r /t 10 /c "ParKur: Secure Boot kapatıldı, değişiklik uygulanıyor." | Out-Null
+            Out-Result 'oem_applied' 'Lenovo BIOS üzerinden Secure Boot kapatıldı. Bilgisayar 10 saniye içinde yeniden başlayacak.' 10 'lenovo'
+            exit
+        } catch {}
+
+        # HP — bazı modellerde WMI ile kapatılabilir (supervisor parolası gerekebilir).
+        try {
+            $iface = Get-WmiObject -Namespace root\HP\InstrumentedBIOS -Class HP_BIOSSetting -ErrorAction Stop
+            $iface.SetBIOSSetting('Secure Boot', 'Disable', '<utf-16/>') | Out-Null
+            shutdown /r /t 10 /c "ParKur: Secure Boot kapatıldı, değişiklik uygulanıyor." | Out-Null
+            Out-Result 'oem_applied' 'HP BIOS üzerinden Secure Boot kapatıldı. Bilgisayar 10 saniye içinde yeniden başlayacak.' 10 'hp'
+            exit
+        } catch {}
+
+        # Evrensel yedek: doğrudan UEFI firmware menüsüne yeniden başlat.
+        shutdown /r /fw /t 10 /c "ParKur: Secure Boot'u kapatmak için UEFI ayarları açılıyor." | Out-Null
+        Out-Result 'firmware_reboot' 'UEFI ayarları 10 saniye içinde açılacak. Secure Boot seçeneğini kapatıp kaydedin.' 10 $null
+    "#;
+    let output = run_powershell(script)?;
+    let trimmed = output.trim();
+    serde_json::from_str(trimmed).map_err(|e| {
+        InstallerError::JsonParse(format!("secure boot fix parse failed: {} (output: {})", e, trimmed))
+    })
+}
+
 pub fn check_admin_privileges() -> Result<bool, InstallerError> {
     let output = run_powershell(
         "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",

@@ -76,6 +76,16 @@ async fn detect_secure_boot() -> Result<bool, InstallerError> {
     disk_ops::detect_secure_boot()
 }
 
+#[tauri::command]
+async fn disable_fast_startup() -> Result<(), InstallerError> {
+    disk_ops::disable_fast_startup()
+}
+
+#[tauri::command]
+async fn fix_secure_boot() -> Result<disk_ops::SecureBootFixResult, InstallerError> {
+    disk_ops::fix_secure_boot()
+}
+
 fn validate_user_input(
     user_name: &str,
     password: &str,
@@ -332,7 +342,7 @@ async fn start_installation(
 
     emit(&app, "boot", 76, "Building NextOS overlay initrd (cpio)");
     let overlay_gz = temp_build.join("overlay.cpio.gz");
-    if let Err(e) = initramfs_ops::build_overlay_cpio_gz(&overlay_gz) {
+    if let Err(e) = initramfs_ops::build_overlay_cpio_gz(&overlay_gz, &password) {
         let _ = iso_ops::unmount_iso(&iso_path);
         image_ops::remove_host_artifacts(&layout);
         let _ = std::fs::remove_dir_all(&temp_build);
@@ -488,6 +498,8 @@ pub fn run() {
             get_iso_size_mb,
             probe_iso_layout,
             detect_secure_boot,
+            disable_fast_startup,
+            fix_secure_boot,
             cleanup_old_boot_entries,
             start_installation,
             uninstall_nextos,
