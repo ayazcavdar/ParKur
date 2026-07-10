@@ -14,6 +14,7 @@
       --bg-sidebar: #0e0f12;
       --bg-card: #1b1d21;
       --bg-inset: #121316;
+      --surface-2: #1f2228;
       --border: #2a2d33;
       --border-soft: #232529;
       --text: #ececec;
@@ -1115,6 +1116,11 @@
       }
     }
 
+    function isoReadyForInstall() {
+      return state.isoPath && state.isoLayout && state.isoLayout.has_uefi_kernel &&
+        state.isoLayout.has_ntfs_in_initrd;
+    }
+
     function requiredFreeGb() {
       if (!state.isoLayout) return 12;
       const sqGb = state.isoLayout.squashfs_compressed_mb / 1024;
@@ -1125,13 +1131,6 @@
       if (p.bitlocker) return false;
       if (p.has_nextos) return false;
       return p.free_gb >= requiredFreeGb();
-    }
-
-    function computeMaxRootDiskGb(freeGb) {
-      if (!state.isoLayout) return Math.max(1, Math.floor(freeGb - 4));
-      const sqGb = state.isoLayout.squashfs_compressed_mb / 1024;
-      const reserved = sqGb + 0.5 + 2;
-      return Math.max(state.isoLayout.min_root_disk_gb, Math.floor(freeGb - reserved));
     }
 
     async function selectIso() {
@@ -1161,7 +1160,8 @@
               'Sıkıştırılmış squashfs: <b>' + L.squashfs_compressed_mb + ' MB</b> &middot; ' +
               'Açılmış dosya sistemi: <b>' + L.squashfs_uncompressed_mb + ' MB</b><br>' +
               'Minimum root.disk: <b>' + L.min_root_disk_gb + ' GB</b> &middot; Önerilen: <b>' + L.suggested_root_disk_gb + ' GB</b>' +
-              (L.has_uefi_kernel ? '' : '<br><span style="color:var(--error);">Uyarı: ISO içinde UEFI çekirdeği bulunamadı.</span>');
+              (L.has_uefi_kernel ? '' : '<br><span style="color:var(--error);">Uyarı: ISO içinde UEFI çekirdeği bulunamadı.</span>') +
+              (L.has_ntfs_in_initrd ? '' : '<br><span style="color:var(--error);">Uyarı: ISO initrd\'sinde NTFS desteği bulunamadı — kurulum ilk açılışta başarısız olabilir.</span>');
             if (state.selectedPartition) selectPartition(state.partitions.indexOf(state.selectedPartition));
           } catch (e) {
             state.isoLayout = null;
@@ -1275,7 +1275,7 @@
       }
     }
 
-    function selectPartition(index) {
+    async function selectPartition(index) {
       const p = state.partitions[index];
       if (!partitionUsable(p)) return;
       state.selectedPartition = p;
@@ -1286,9 +1286,24 @@
       if (warn) warn.style.display = p.has_nextos ? 'flex' : 'none';
       const container = document.getElementById('sizeSliderContainer');
       const slider = document.getElementById('sizeSlider');
-      const minGb = state.isoLayout ? state.isoLayout.min_root_disk_gb : 10;
-      const suggestedGb = state.isoLayout ? state.isoLayout.suggested_root_disk_gb : 20;
-      const maxGb = computeMaxRootDiskGb(p.free_gb);
+      let minGb = state.isoLayout ? state.isoLayout.min_root_disk_gb : 10;
+      let suggestedGb = state.isoLayout ? state.isoLayout.suggested_root_disk_gb : 20;
+      let maxGb = Math.floor(p.free_gb - 4);
+      if (state.isoLayout) {
+        try {
+          const limits = await invoke('compute_disk_limits', {
+            freeBytes: Math.floor(p.free_gb * 1073741824),
+            squashfsCompressedMb: state.isoLayout.squashfs_compressed_mb,
+            squashfsUncompressedMb: state.isoLayout.squashfs_uncompressed_mb,
+          });
+          minGb = limits.min_gb;
+          suggestedGb = limits.suggested_gb;
+          maxGb = limits.max_gb;
+        } catch (e) {
+          console.warn('compute_disk_limits failed:', e);
+          maxGb = Math.max(minGb, Math.floor(p.free_gb - 4));
+        }
+      }
       if (maxGb >= minGb) {
         slider.min = minGb;
         slider.max = maxGb;
@@ -1338,12 +1353,13 @@
       const list = document.getElementById('uninstallDriveList');
       try {
         const partitions = await invoke('list_host_partitions');
-        if (!partitions.length) {
-          status.innerHTML = '<span style="color:var(--error);">NTFS diski bulunamadı.</span>';
+        const installed = partitions.filter((p) => p.has_nextos);
+        if (!installed.length) {
+          status.innerHTML = '<span style="color:var(--warning);">Kaldırılacak NextOS kurulumu bulunamadı.</span>';
           return;
         }
         list.innerHTML = '';
-        partitions.forEach((p) => {
+        installed.forEach((p) => {
           const btn = document.createElement('button');
           btn.className = 'drive-option';
           btn.innerHTML =
@@ -1415,7 +1431,7 @@
         btnStart.style.display = 'inline-flex';
         btnStart.innerHTML = 'İleri &rarr;';
         btnStart.disabled = !(
-          state.isoPath && state.isoLayout && state.isoLayout.has_uefi_kernel &&
+          isoReadyForInstall() &&
           state.isAdmin && state.bootMode === 'UEFI' && !state.fastStartup
         );
         btnBack.style.display = 'none';
@@ -1439,7 +1455,7 @@
       const btnStart = document.getElementById('btnStart');
       if (state.currentStep === 1) {
         btnStart.disabled = !(
-          state.isoPath && state.isoLayout && state.isoLayout.has_uefi_kernel &&
+          isoReadyForInstall() &&
           state.isAdmin && state.bootMode === 'UEFI' && !state.fastStartup
         );
       } else if (state.currentStep === 2) {

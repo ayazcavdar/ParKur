@@ -1,5 +1,6 @@
 use crate::error::InstallerError;
 use crate::util::CREATE_NO_WINDOW;
+use serde::{Deserialize, Serialize};
 use std::io::{Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,28 @@ pub fn validate_root_disk_size(
         )));
     }
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiskLimits {
+    pub min_gb: u32,
+    pub suggested_gb: u32,
+    pub max_gb: u32,
+}
+
+pub fn compute_disk_limits(
+    free_bytes: u64,
+    squashfs_compressed_bytes: u64,
+    squashfs_uncompressed_bytes: u64,
+) -> DiskLimits {
+    let min_gb = min_root_disk_gb(squashfs_uncompressed_bytes);
+    let suggested_gb = suggested_root_disk_gb(min_gb);
+    let max_gb = max_root_disk_gb_for_free(free_bytes, squashfs_compressed_bytes);
+    DiskLimits {
+        min_gb,
+        suggested_gb,
+        max_gb,
+    }
 }
 
 pub fn max_root_disk_gb_for_free(

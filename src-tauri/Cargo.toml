@@ -1,8 +1,8 @@
 [package]
 name = "next_os_installer"
-version = "0.1.0"
-description = "NextOS Wubi-Style Loop-Mount Installer"
-authors = ["NextOS"]
+version = "0.2.0"
+description = "ParKur — NextOS Wubi-Style Loop-Mount Installer"
+authors = ["Ayaz Çavdar"]
 edition = "2021"
 
 [lib]

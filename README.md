@@ -13,7 +13,7 @@ on an NTFS volume. Built with Tauri v2 (Rust backend + vanilla HTML/CSS/JS front
 
 1. The user selects a Pardus/Debian-based **live** ISO (64-bit UEFI)
 2. Enters account credentials (username, password, hostname), locale and timezone
-3. Picks a target NTFS partition and a `root.disk` size (10–100 GB)
+3. Picks a target NTFS partition and a `root.disk` size (dynamic min/max from ISO + free space)
 4. ParKur copies the payload and configures the bootloader — **no partition is shrunk,
    moved or formatted**
 5. On reboot, the "NextOS" UEFI entry boots Linux from inside the NTFS volume;
@@ -28,13 +28,15 @@ Everything lives in a `NextOS\` folder on the chosen NTFS drive:
 | `NextOS\root.disk` | Preallocated raw file, formatted ext4 on first boot — the Linux root filesystem |
 | `NextOS\filesystem.squashfs` | Root payload copied from the ISO |
 | `NextOS\boot\vmlinuz`, `initrd.img` | Kernel + stock initrd copied from the ISO |
-| `NextOS\boot\overlay.cpio.gz` | ParKur-built second initrd (cpio newc, built natively in Rust) |
+| `NextOS\boot\overlay.cpio.gz` | ParKur-built second initrd (cpio newc, built natively in Rust); rebuilt without secrets after first boot |
 | `NextOS\nextos.conf` | Provisioning config (username, **SHA-512 password hash**, hostname, locale, timezone) — destroyed after first boot |
+| `NextOS\.nextos-formatted` | Marker written after successful ext4 format — prevents accidental reformat |
 
 **Install phase (Windows):**
 
 - Environment probe: admin rights, UEFI firmware, Secure Boot, free space, **BitLocker**
-  (BitLocker-encrypted targets are rejected)
+  (BitLocker-encrypted targets are rejected); ISO preflight checks for UEFI kernel and
+  NTFS modules in the stock initrd
 - `root.disk` is preallocated with `fsutil`, head/tail zeroed to kill stale filesystem signatures
 - The EFI shim/GRUB chain is copied from the ISO to `ESP:\EFI\NextOS` (plus the
   `EFI\BOOT\BOOTX64.EFI` removable fallback — the original file is backed up first)
@@ -51,15 +53,16 @@ Everything lives in a `NextOS\` folder on the chosen NTFS drive:
 - First boot only: `mkfs.ext4` runs *from inside the squashfs via chroot*, then the
   rootfs is extracted with multi-threaded `unsquashfs` (cp -a fallback)
 - `nextos-firstboot.service` provisions the system: creates the user (password applied
-  from the SHA-512 hash via `chpasswd -e`), hostname, locale, timezone, keyboard layout;
-  **removes all live-image users** (`pardus`, `user`, `live`, … any leftover UID ≥ 1000)
-  and their autologin configs (login screen asks for a password each boot);
+  from a one-time `install.pass` embedded in the overlay initrd, with SHA-512 hash
+  fallback; login screen asks for a password each boot);
+  **removes live-image users only after password is verified**;
+  hostname, locale, timezone, keyboard layout;
   purges live/installer packages (Calamares etc.);
-  installs initramfs hooks so kernel updates keep working; then reboots into the
-  finished system
+  rebuilds `overlay.cpio.gz` on NTFS without secrets;
+  installs initramfs hooks so kernel updates keep syncing to `NextOS\boot`; then reboots
 
-**Uninstall:** removes the `NextOS\` folder, UEFI entries and ESP payload, and restores
-the backed-up original bootloader files.
+**Uninstall:** removes the `NextOS\` folder, UEFI entries and ESP payload, restores
+backed-up bootloader files. Only drives with an existing NextOS install are offered.
 
 ## Requirements
 

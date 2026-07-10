@@ -267,7 +267,19 @@ log "loop device: $LOOPDEV"
 # for formatted, and an already-populated root.disk can never be
 # destructively reformatted because of a flaky filesystem probe.
 FORMAT_MARKER="/host$NEXTOS_DIR_PATH/.nextos-formatted"
-if [ ! -f "$FORMAT_MARKER" ]; then
+ROOT_ALREADY_EXT4=0
+if blkid -s TYPE -o value "$LOOPDEV" 2>/dev/null | grep -qx 'ext4'; then
+    ROOT_ALREADY_EXT4=1
+    log "root.disk loop already carries ext4"
+fi
+
+if [ -f "$FORMAT_MARKER" ]; then
+    log "format marker present — skipping mkfs"
+elif [ "$ROOT_ALREADY_EXT4" -eq 1 ]; then
+    log "marker missing but ext4 present — recreating marker only"
+    touch "$FORMAT_MARKER" || fatal "failed to recreate format marker on NTFS host"
+    sync
+else
     log "first boot — formatting root.disk ext4 in-flight (~60s, please wait)"
     SQUASH="/host${NEXTOS_SQUASHFS_PATH}"
     [ -f "$SQUASH" ] || fatal "squashfs not found at $SQUASH for in-flight mkfs"
@@ -301,7 +313,8 @@ if [ ! -f "$FORMAT_MARKER" ]; then
     rmdir  "$MFSTMP"      2>/dev/null || true
 
     [ "$MKFS_RC" -eq 0 ] || fatal "mkfs.ext4 failed (rc=$MKFS_RC)"
-    touch "$FORMAT_MARKER" 2>/dev/null || true
+    touch "$FORMAT_MARKER" || fatal "failed to write format marker — aborting to avoid reformat loop"
+    sync
     log "ext4 format complete"
 fi
 

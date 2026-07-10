@@ -2,7 +2,9 @@ use crate::error::InstallerError;
 use crate::image_ops;
 use crate::squashfs_ops;
 use crate::util::run_powershell;
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -18,6 +20,8 @@ pub struct IsoLayoutInfo {
     pub min_root_disk_gb: u32,
     pub suggested_root_disk_gb: u32,
     pub has_uefi_kernel: bool,
+    /// True when the stock initrd appears to ship NTFS (or ntfs3) support.
+    pub has_ntfs_in_initrd: bool,
 }
 
 pub fn get_iso_size_mb(iso_path: &str) -> Result<u64, InstallerError> {
@@ -228,11 +232,57 @@ fn squashfs_host_path(iso_drive_letter: &str, squashfs_rel: &str) -> String {
     )
 }
 
+fn initrd_host_path(iso_drive_letter: &str, initrd_rel: &str) -> String {
+    format!(
+        "{}:\\{}",
+        iso_drive_letter.trim_end_matches(':'),
+        initrd_rel.replace('/', "\\")
+    )
+}
+
+/// Heuristic scan of the ISO's stock initrd for NTFS kernel modules.
+pub fn probe_initrd_has_ntfs(initrd_path: &Path) -> Result<bool, InstallerError> {
+    let raw = std::fs::read(initrd_path)
+        .map_err(|e| InstallerError::Io(format!("initrd read failed: {}", e)))?;
+    let payload = decompress_initrd_payload(&raw)?;
+    Ok(initrd_payload_has_ntfs(&payload))
+}
+
+fn decompress_initrd_payload(raw: &[u8]) -> Result<Vec<u8>, InstallerError> {
+    if raw.len() >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+        let mut dec = GzDecoder::new(raw);
+        let mut out = Vec::new();
+        dec.read_to_end(&mut out).map_err(|e| {
+            InstallerError::IsoExtraction(format!("initrd gzip decompress failed: {}", e))
+        })?;
+        return Ok(out);
+    }
+    Ok(raw.to_vec())
+}
+
+fn initrd_payload_has_ntfs(payload: &[u8]) -> bool {
+    const NEEDLES: &[&[u8]] = &[
+        b"ntfs3.ko",
+        b"ntfs.ko",
+        b"kernel/fs/ntfs",
+        b"kernel/fs/ntfs3",
+        b"modules/ntfs",
+        b"modules/ntfs3",
+        b"ntfs-3g",
+    ];
+    NEEDLES
+        .iter()
+        .any(|needle| payload.windows(needle.len()).any(|w| w == *needle))
+}
+
 /// Mount the ISO briefly and derive sizing guidance from its squashfs payload.
 pub fn probe_iso_layout(iso_path: &str) -> Result<IsoLayoutInfo, InstallerError> {
     let iso_drive = mount_iso(iso_path)?;
     let result = (|| {
-        let has_uefi_kernel = find_linux_kernel(&iso_drive).is_ok();
+        let kernel = find_linux_kernel(&iso_drive)?;
+        let has_uefi_kernel = true;
+        let initrd_path = initrd_host_path(&iso_drive, &kernel.initrd_path);
+        let has_ntfs_in_initrd = probe_initrd_has_ntfs(Path::new(&initrd_path))?;
         let squashfs_rel = find_squashfs_path(&iso_drive)?;
         let squashfs_path = squashfs_host_path(&iso_drive, &squashfs_rel);
         let compressed = std::fs::metadata(&squashfs_path)
@@ -247,6 +297,7 @@ pub fn probe_iso_layout(iso_path: &str) -> Result<IsoLayoutInfo, InstallerError>
             min_root_disk_gb: min_gb,
             suggested_root_disk_gb: suggested_gb,
             has_uefi_kernel,
+            has_ntfs_in_initrd,
         })
     })();
     let _ = unmount_iso(iso_path);

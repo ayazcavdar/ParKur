@@ -72,6 +72,19 @@ async fn probe_iso_layout(path: String) -> Result<iso_ops::IsoLayoutInfo, Instal
 }
 
 #[tauri::command]
+async fn compute_disk_limits(
+    free_bytes: u64,
+    squashfs_compressed_mb: u64,
+    squashfs_uncompressed_mb: u64,
+) -> Result<image_ops::DiskLimits, InstallerError> {
+    Ok(image_ops::compute_disk_limits(
+        free_bytes,
+        squashfs_compressed_mb.saturating_mul(1024 * 1024),
+        squashfs_uncompressed_mb.saturating_mul(1024 * 1024),
+    ))
+}
+
+#[tauri::command]
 async fn detect_secure_boot() -> Result<bool, InstallerError> {
     disk_ops::detect_secure_boot()
 }
@@ -427,8 +440,15 @@ async fn start_installation(
 async fn uninstall_nextos(host_drive_letter: String) -> Result<(), InstallerError> {
     if !disk_ops::check_admin_privileges()? {
         return Err(InstallerError::PermissionDenied(
-            "Run as Administrator to uninstall.".into(),
+            "Kaldırmak için yönetici olarak çalıştırın.".into(),
         ));
+    }
+    let letter = host_drive_letter.trim().trim_end_matches(':');
+    if !image_ops::host_has_nextos_install(letter) {
+        return Err(InstallerError::InvalidInput(format!(
+            "{}:\\ sürücüsünde NextOS kurulumu bulunamadı.",
+            letter.to_uppercase()
+        )));
     }
     let _ = boot_ops::cleanup_nextos_firmware_entries();
     if let Ok(esp_letter) = boot_ops::mount_esp() {
@@ -497,6 +517,7 @@ pub fn run() {
             list_host_partitions,
             get_iso_size_mb,
             probe_iso_layout,
+            compute_disk_limits,
             detect_secure_boot,
             disable_fast_startup,
             fix_secure_boot,

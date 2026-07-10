@@ -59,6 +59,7 @@ case "$NEXTOS_LOCALE" in
     es_*) KB_LAYOUT="es" ;;
     ru_*) KB_LAYOUT="ru" ;;
     ja_*) KB_LAYOUT="jp" ;;
+    zh_*) KB_LAYOUT="cn" ;;
     en_GB*) KB_LAYOUT="gb" ;;
     *)    KB_LAYOUT="us" ;;
 esac
@@ -70,23 +71,6 @@ for _skeldir in /etc/skel/Desktop /etc/skel/.config/autostart; do
     [ -d "$_skeldir" ] || continue
     find "$_skeldir" -maxdepth 1 -iname '*calamares*' -delete 2>/dev/null || true
     find "$_skeldir" -maxdepth 1 -iname '*install*'   -delete 2>/dev/null || true
-done
-
-echo "[nextos-firstboot] removing live-image accounts before creating $NEXTOS_USERNAME"
-LIVE_USER_NAMES="user live casper pardus debian ubuntu"
-for u in $LIVE_USER_NAMES; do
-    if id "$u" >/dev/null 2>&1; then
-        echo "[nextos-firstboot] removing live user $u"
-        pkill -KILL -u "$u" 2>/dev/null || true
-        userdel -r -f "$u" 2>/dev/null || true
-    fi
-done
-LEFTOVER_USERS=$(awk -F: -v keep="$NEXTOS_USERNAME" \
-    '$3 >= 1000 && $1 != keep && $1 != "nobody" { print $1 }' /etc/passwd)
-for _name in $LEFTOVER_USERS; do
-    echo "[nextos-firstboot] removing leftover account $_name"
-    pkill -KILL -u "$_name" 2>/dev/null || true
-    userdel -r -f "$_name" 2>/dev/null || true
 done
 
 echo "[nextos-firstboot] creating user $NEXTOS_USERNAME"
@@ -141,6 +125,59 @@ if [ "$PASSWORD_OK" -ne 1 ]; then
 fi
 echo "[nextos-firstboot] password set for $NEXTOS_USERNAME"
 shred -u "$PASS_FILE" 2>/dev/null || rm -f "$PASS_FILE"
+
+remove_live_image_accounts() {
+    echo "[nextos-firstboot] removing live-image accounts"
+    LIVE_USER_NAMES="user live casper pardus debian ubuntu"
+    for u in $LIVE_USER_NAMES; do
+        if [ "$u" != "$NEXTOS_USERNAME" ] && id "$u" >/dev/null 2>&1; then
+            echo "[nextos-firstboot] removing live user $u"
+            pkill -KILL -u "$u" 2>/dev/null || true
+            userdel -r -f "$u" 2>/dev/null || true
+        fi
+    done
+    LEFTOVER_USERS=$(awk -F: -v keep="$NEXTOS_USERNAME" \
+        '$3 >= 1000 && $1 != keep && $1 != "nobody" { print $1 }' /etc/passwd)
+    for _name in $LEFTOVER_USERS; do
+        echo "[nextos-firstboot] removing leftover account $_name"
+        pkill -KILL -u "$_name" 2>/dev/null || true
+        userdel -r -f "$_name" 2>/dev/null || true
+    done
+}
+remove_live_image_accounts
+
+sanitize_host_overlay_cpio() {
+    local boot_dir="/host/NextOS/boot"
+    local overlay="$boot_dir/overlay.cpio.gz"
+    local init_src="/usr/local/sbin/nextos-init"
+    [ -f "$overlay" ] || return 0
+    [ -f "$init_src" ] || { echo "[nextos-firstboot] WARNING: $init_src missing — overlay not rebuilt" >&2; return 0; }
+    command -v cpio >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1 || {
+        echo "[nextos-firstboot] WARNING: cpio/gzip missing — overlay may still contain install.pass" >&2
+        return 0
+    }
+    local tmp cpio_raw
+    tmp=$(mktemp -d)
+    cpio_raw=$(mktemp)
+    mkdir -p "$tmp/usr/local/sbin"
+    cp "$init_src" "$tmp/init"
+    chmod 0755 "$tmp/init"
+    cp /usr/local/sbin/nextos-firstboot "$tmp/usr/local/sbin/nextos-firstboot"
+    chmod 0755 "$tmp/usr/local/sbin/nextos-firstboot"
+    (
+        cd "$tmp" || exit 1
+        find . | cpio -o -H newc 2>/dev/null
+    ) > "$cpio_raw" || {
+        rm -rf "$tmp" "$cpio_raw"
+        echo "[nextos-firstboot] WARNING: overlay cpio rebuild failed" >&2
+        return 0
+    }
+    gzip -9 -c "$cpio_raw" > "$overlay.new" && mv "$overlay.new" "$overlay"
+    rm -rf "$tmp" "$cpio_raw"
+    sync
+    echo "[nextos-firstboot] rebuilt host overlay without install.pass"
+}
+sanitize_host_overlay_cpio
 
 usermod -aG sudo "$NEXTOS_USERNAME" 2>/dev/null || true
 usermod -aG adm,audio,video,plugdev,netdev,bluetooth "$NEXTOS_USERNAME" 2>/dev/null || true
@@ -277,7 +314,9 @@ cat > /etc/kernel/postinst.d/zz-nextos-sync-boot <<'POSTINST'
 set -e
 VERSION="$1"
 BOOT_DIR="/host/NextOS/boot"
-[ -d "$BOOT_DIR" ] || exit 0
+mkdir -p /host
+mountpoint -q /host 2>/dev/null || mount /host 2>/dev/null || true
+[ -d "$BOOT_DIR" ] || { echo "nextos-sync: $BOOT_DIR missing" >&2; exit 0; }
 if [ -f "/boot/vmlinuz-$VERSION" ]; then
     install -m 0644 "/boot/vmlinuz-$VERSION" "$BOOT_DIR/vmlinuz.new"
     mv "$BOOT_DIR/vmlinuz.new" "$BOOT_DIR/vmlinuz"
@@ -297,7 +336,9 @@ set -e
 VERSION="$1"
 GENERATED="$2"
 BOOT_DIR="/host/NextOS/boot"
-[ -d "$BOOT_DIR" ] || exit 0
+mkdir -p /host
+mountpoint -q /host 2>/dev/null || mount /host 2>/dev/null || true
+[ -d "$BOOT_DIR" ] || { echo "nextos-sync: $BOOT_DIR missing" >&2; exit 0; }
 [ -n "$GENERATED" ] || exit 0
 [ -f "$GENERATED" ] || exit 0
 install -m 0644 "$GENERATED" "$BOOT_DIR/initrd.img.new"
@@ -328,7 +369,20 @@ if [ -n "$HOST_FSTAB_SRC" ]; then
     echo "$HOST_FSTAB_SRC  /host  ntfs3  defaults,noatime,nofail  0 0" >> /etc/fstab
 fi
 
-# Scrub every autologin rule the live image ships — we do NOT configure
+ensure_host_mounted() {
+    mkdir -p /host
+    if mountpoint -q /host 2>/dev/null; then
+        return 0
+    fi
+    mount /host 2>/dev/null && return 0
+    mount -t ntfs3 -o rw,noatime /host 2>/dev/null && return 0
+    mount -t ntfs-3g -o rw,noatime /host 2>/dev/null && return 0
+    echo "[nextos-firstboot] WARNING: /host mount failed — NTFS boot sync may not work" >&2
+    return 1
+}
+ensure_host_mounted || true
+
+# Scrub every autologin rule the live image ships
 # autologin for the new user; the display manager must prompt for a password
 # on every boot.
 echo "[nextos-firstboot] scrubbing live-image autologin configuration"
@@ -380,9 +434,10 @@ update-initramfs -u -k "$(uname -r)" || update-initramfs -u -k all || true
 
 CUR_KERNEL=$(uname -r)
 BOOT_DIR="/host/NextOS/boot"
-if [ -d "$BOOT_DIR" ]; then
+if ensure_host_mounted && [ -d "$BOOT_DIR" ]; then
     [ -f "/boot/vmlinuz-$CUR_KERNEL" ] && cp "/boot/vmlinuz-$CUR_KERNEL" "$BOOT_DIR/vmlinuz"
     [ -f "/boot/initrd.img-$CUR_KERNEL" ] && cp "/boot/initrd.img-$CUR_KERNEL" "$BOOT_DIR/initrd.img"
+    sanitize_host_overlay_cpio
     sync
 fi
 

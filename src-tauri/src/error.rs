@@ -18,16 +18,16 @@ pub enum InstallerError {
 impl fmt::Display for InstallerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DiskOperation(m) => write!(f, "Disk operation error: {}", m),
-            Self::IsoExtraction(m) => write!(f, "ISO extraction error: {}", m),
-            Self::BootloaderConfig(m) => write!(f, "Bootloader configuration error: {}", m),
-            Self::PermissionDenied(m) => write!(f, "Permission denied: {}", m),
-            Self::CommandExecution(m) => write!(f, "Command execution error: {}", m),
-            Self::InvalidInput(m) => write!(f, "Invalid input: {}", m),
-            Self::Io(m) => write!(f, "I/O error: {}", m),
-            Self::JsonParse(m) => write!(f, "JSON parse error: {}", m),
-            Self::ImageOperation(m) => write!(f, "Image operation error: {}", m),
-            Self::InitramfsBuild(m) => write!(f, "Initramfs build error: {}", m),
+            Self::DiskOperation(m) => write!(f, "Disk işlemi hatası: {}", m),
+            Self::IsoExtraction(m) => write!(f, "ISO çıkarma hatası: {}", m),
+            Self::BootloaderConfig(m) => write!(f, "Önyükleyici yapılandırma hatası: {}", m),
+            Self::PermissionDenied(m) => write!(f, "Yetki reddedildi: {}", m),
+            Self::CommandExecution(m) => write!(f, "Komut çalıştırma hatası: {}", m),
+            Self::InvalidInput(m) => write!(f, "Geçersiz girdi: {}", m),
+            Self::Io(m) => write!(f, "G/Ç hatası: {}", m),
+            Self::JsonParse(m) => write!(f, "JSON ayrıştırma hatası: {}", m),
+            Self::ImageOperation(m) => write!(f, "İmaj işlemi hatası: {}", m),
+            Self::InitramfsBuild(m) => write!(f, "Initramfs oluşturma hatası: {}", m),
         }
     }
 }
