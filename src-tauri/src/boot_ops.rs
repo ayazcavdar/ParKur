@@ -155,8 +155,10 @@ pub fn copy_efi_payload_from_iso(
     }
 
     if copied.is_empty() {
-        return Err(InstallerError::BootloaderConfig(
-            "No valid EFI binaries found in ISO. The ISO must support 64-bit UEFI.".into(),
+        return Err(InstallerError::coded(
+            InstallerError::BootloaderConfig,
+            "ERR_NO_UEFI_EFI",
+            &[],
         ));
     }
 
@@ -173,8 +175,10 @@ pub fn copy_efi_payload_from_iso(
         "grubx64.efi"
     } else {
         // Last resort: first file we copied
-        return Err(InstallerError::BootloaderConfig(
-            "No recognisable EFI boot application found in ISO.".into(),
+        return Err(InstallerError::coded(
+            InstallerError::BootloaderConfig,
+            "ERR_NO_BOOT_APP",
+            &[],
         ));
     };
 

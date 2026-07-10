@@ -48,15 +48,18 @@ const SQUASHFS_SEARCH_PATHS: &[&str] = &[
 
 pub fn mount_iso(iso_path: &str) -> Result<String, InstallerError> {
     if !std::path::Path::new(iso_path).exists() {
-        return Err(InstallerError::InvalidInput(format!(
-            "ISO file not found: {}",
-            iso_path
-        )));
+        return Err(InstallerError::coded(
+            InstallerError::InvalidInput,
+            "ERR_ISO_NOT_FOUND",
+            &[("path", iso_path)],
+        ));
     }
 
     if !iso_path.to_lowercase().ends_with(".iso") {
-        return Err(InstallerError::InvalidInput(
-            "Selected file is not an ISO".into(),
+        return Err(InstallerError::coded(
+            InstallerError::InvalidInput,
+            "ERR_NOT_ISO",
+            &[],
         ));
     }
 

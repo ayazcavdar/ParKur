@@ -106,8 +106,10 @@ pub fn detect_secure_boot() -> Result<bool, InstallerError> {
 /// Turn off Windows Fast Startup (hiberboot) so Linux can mount NTFS read-write.
 pub fn disable_fast_startup() -> Result<(), InstallerError> {
     if !check_admin_privileges()? {
-        return Err(InstallerError::PermissionDenied(
-            "Hızlı Başlatmayı kapatmak için yönetici yetkisi gerekir.".into(),
+        return Err(InstallerError::coded(
+            InstallerError::PermissionDenied,
+            "ERR_FAST_STARTUP_ADMIN",
+            &[],
         ));
     }
     run_powershell(
@@ -118,8 +120,10 @@ pub fn disable_fast_startup() -> Result<(), InstallerError> {
         "#,
     )?;
     if check_fast_startup_enabled()? {
-        return Err(InstallerError::DiskOperation(
-            "Hızlı Başlatma kapatılamadı. Denetim Masası → Güç Seçenekleri üzerinden deneyin.".into(),
+        return Err(InstallerError::coded(
+            InstallerError::DiskOperation,
+            "ERR_FAST_STARTUP_DISABLE_FAILED",
+            &[],
         ));
     }
     Ok(())
@@ -128,7 +132,7 @@ pub fn disable_fast_startup() -> Result<(), InstallerError> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SecureBootFixResult {
     pub status: String,
-    pub message: String,
+    pub message_key: String,
     pub reboot_seconds: Option<u32>,
     pub vendor: Option<String>,
 }
@@ -137,15 +141,17 @@ pub struct SecureBootFixResult {
 /// reboot straight into UEFI firmware settings (`shutdown /r /fw`).
 pub fn fix_secure_boot() -> Result<SecureBootFixResult, InstallerError> {
     if !check_admin_privileges()? {
-        return Err(InstallerError::PermissionDenied(
-            "Secure Boot ayarını değiştirmek için yönetici yetkisi gerekir.".into(),
+        return Err(InstallerError::coded(
+            InstallerError::PermissionDenied,
+            "ERR_SECURE_BOOT_ADMIN",
+            &[],
         ));
     }
     let script = r#"
-        function Out-Result($status, $message, $seconds, $vendor) {
+        function Out-Result($status, $messageKey, $seconds, $vendor) {
             [PSCustomObject]@{
                 status = $status
-                message = $message
+                message_key = $messageKey
                 reboot_seconds = $seconds
                 vendor = $vendor
             } | ConvertTo-Json -Compress
@@ -156,11 +162,11 @@ pub fn fix_secure_boot() -> Result<SecureBootFixResult, InstallerError> {
             $sb = (Get-SecureBootUEFI -Name 'SecureBoot' -ErrorAction Stop).Bytes[0]
             $sbOn = ($sb -eq 1)
         } catch {
-            Out-Result 'already_off' 'Secure Boot zaten kapalı veya bu sistemde desteklenmiyor.' $null $null
+            Out-Result 'already_off' 'sb.already_off_unsupported' $null $null
             exit
         }
         if (-not $sbOn) {
-            Out-Result 'already_off' 'Secure Boot zaten kapalı.' $null $null
+            Out-Result 'already_off' 'sb.already_off' $null $null
             exit
         }
 
@@ -170,7 +176,7 @@ pub fn fix_secure_boot() -> Result<SecureBootFixResult, InstallerError> {
             $null = $iface.SetBiosSetting('SecureBoot,Disable', '', 'us', 'ascii', '')
             $null = $iface.SaveBiosSettings()
             shutdown /r /t 10 /c "ParKur: Secure Boot kapatıldı, değişiklik uygulanıyor." | Out-Null
-            Out-Result 'oem_applied' 'Lenovo BIOS üzerinden Secure Boot kapatıldı. Bilgisayar 10 saniye içinde yeniden başlayacak.' 10 'lenovo'
+            Out-Result 'oem_applied' 'sb.oem_applied.lenovo' 10 'lenovo'
             exit
         } catch {}
 
@@ -179,13 +185,13 @@ pub fn fix_secure_boot() -> Result<SecureBootFixResult, InstallerError> {
             $iface = Get-WmiObject -Namespace root\HP\InstrumentedBIOS -Class HP_BIOSSetting -ErrorAction Stop
             $iface.SetBIOSSetting('Secure Boot', 'Disable', '<utf-16/>') | Out-Null
             shutdown /r /t 10 /c "ParKur: Secure Boot kapatıldı, değişiklik uygulanıyor." | Out-Null
-            Out-Result 'oem_applied' 'HP BIOS üzerinden Secure Boot kapatıldı. Bilgisayar 10 saniye içinde yeniden başlayacak.' 10 'hp'
+            Out-Result 'oem_applied' 'sb.oem_applied.hp' 10 'hp'
             exit
         } catch {}
 
         # Evrensel yedek: doğrudan UEFI firmware menüsüne yeniden başlat.
         shutdown /r /fw /t 10 /c "ParKur: Secure Boot'u kapatmak için UEFI ayarları açılıyor." | Out-Null
-        Out-Result 'firmware_reboot' 'UEFI ayarları 10 saniye içinde açılacak. Secure Boot seçeneğini kapatıp kaydedin.' 10 $null
+        Out-Result 'firmware_reboot' 'sb.firmware_reboot' 10 $null
     "#;
     let output = run_powershell(script)?;
     let trimmed = output.trim();

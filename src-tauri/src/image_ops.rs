@@ -43,10 +43,14 @@ pub fn validate_root_disk_size(
     if root_disk_bytes < min_bytes {
         let min_gb = min_root_disk_gb(squashfs_uncompressed_bytes);
         let need_mb = min_bytes / (1024 * 1024);
-        return Err(InstallerError::InvalidInput(format!(
-            "root.disk is too small — need at least {} GB ({} MB) for this ISO's extracted filesystem.",
-            min_gb, need_mb
-        )));
+        return Err(InstallerError::coded(
+            InstallerError::InvalidInput,
+            "ERR_ROOT_DISK_TOO_SMALL",
+            &[
+                ("min_gb", &min_gb.to_string()),
+                ("need_mb", &need_mb.to_string()),
+            ],
+        ));
     }
     Ok(())
 }
@@ -155,12 +159,15 @@ pub fn validate_capacity(
     if free < required {
         let free_gb = free / (1024 * 1024 * 1024);
         let req_gb = required / (1024 * 1024 * 1024);
-        return Err(InstallerError::DiskOperation(format!(
-            "Insufficient free space on {}:\\ — have {} GB, need {} GB (root.disk + squashfs + 2 GB headroom).",
-            drive_letter.trim_end_matches(':'),
-            free_gb,
-            req_gb
-        )));
+        return Err(InstallerError::coded(
+            InstallerError::DiskOperation,
+            "ERR_INSUFFICIENT_SPACE",
+            &[
+                ("drive", drive_letter.trim_end_matches(':')),
+                ("free_gb", &free_gb.to_string()),
+                ("req_gb", &req_gb.to_string()),
+            ],
+        ));
     }
     Ok(())
 }

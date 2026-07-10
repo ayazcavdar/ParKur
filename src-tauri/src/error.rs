@@ -1,5 +1,14 @@
+use crate::i18n;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientError {
+    pub code: String,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub params: HashMap<String, String>,
+}
 
 #[derive(Debug)]
 pub enum InstallerError {
@@ -15,19 +24,43 @@ pub enum InstallerError {
     InitramfsBuild(String),
 }
 
+impl InstallerError {
+    pub fn coded(variant: fn(String) -> Self, code: &str, params: &[(&str, &str)]) -> Self {
+        variant(i18n::encode(code, params))
+    }
+
+    pub fn to_client_error(&self) -> ClientError {
+        let raw = match self {
+            Self::DiskOperation(m)
+            | Self::IsoExtraction(m)
+            | Self::BootloaderConfig(m)
+            | Self::PermissionDenied(m)
+            | Self::CommandExecution(m)
+            | Self::InvalidInput(m)
+            | Self::Io(m)
+            | Self::JsonParse(m)
+            | Self::ImageOperation(m)
+            | Self::InitramfsBuild(m) => m,
+        };
+        let (code, params) = if raw.starts_with("ERR_") || raw.starts_with("progress.") {
+            i18n::decode(raw)
+        } else {
+            (
+                "ERR_GENERIC".to_string(),
+                HashMap::from([("detail".to_string(), raw.clone())]),
+            )
+        };
+        ClientError { code, params }
+    }
+}
+
 impl fmt::Display for InstallerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DiskOperation(m) => write!(f, "Disk işlemi hatası: {}", m),
-            Self::IsoExtraction(m) => write!(f, "ISO çıkarma hatası: {}", m),
-            Self::BootloaderConfig(m) => write!(f, "Önyükleyici yapılandırma hatası: {}", m),
-            Self::PermissionDenied(m) => write!(f, "Yetki reddedildi: {}", m),
-            Self::CommandExecution(m) => write!(f, "Komut çalıştırma hatası: {}", m),
-            Self::InvalidInput(m) => write!(f, "Geçersiz girdi: {}", m),
-            Self::Io(m) => write!(f, "G/Ç hatası: {}", m),
-            Self::JsonParse(m) => write!(f, "JSON ayrıştırma hatası: {}", m),
-            Self::ImageOperation(m) => write!(f, "İmaj işlemi hatası: {}", m),
-            Self::InitramfsBuild(m) => write!(f, "Initramfs oluşturma hatası: {}", m),
+        let c = self.to_client_error();
+        if c.params.is_empty() {
+            write!(f, "{}", c.code)
+        } else {
+            write!(f, "{}|{:?}", c.code, c.params)
         }
     }
 }
@@ -51,6 +84,6 @@ impl Serialize for InstallerError {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        self.to_client_error().serialize(serializer)
     }
 }

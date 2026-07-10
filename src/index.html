@@ -160,6 +160,38 @@
 
     .version { font-size: 11px; color: var(--text-faint); }
 
+    .lang-switch {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+
+    .lang-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 6px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-dim);
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s, background 0.2s;
+    }
+
+    .lang-btn:hover { border-color: var(--text-faint); color: var(--text); }
+    .lang-btn.active {
+      border-color: var(--accent-border);
+      color: var(--accent-soft);
+      background: var(--accent-dim);
+    }
+
+    .lang-flag { font-size: 15px; line-height: 1; }
+
     /* ── Main area ───────────────────────────────────── */
     .main {
       flex: 1;
@@ -675,7 +707,7 @@
         </svg>
         <div>
           <div class="brand-name">ParKur</div>
-          <div class="brand-sub">Pardus Kurulum Aracı</div>
+          <div class="brand-sub" id="brandSub">Pardus Kurulum Aracı</div>
         </div>
       </div>
 
@@ -692,8 +724,16 @@
       </nav>
 
       <div class="sidebar-footer">
+        <div class="lang-switch">
+          <button type="button" class="lang-btn" id="langTr" onclick="setUiLang('tr')" title="Türkçe">
+            <span class="lang-flag">🇹🇷</span><span>TR</span>
+          </button>
+          <button type="button" class="lang-btn" id="langEn" onclick="setUiLang('en')" title="English">
+            <span class="lang-flag">🇬🇧</span><span>EN</span>
+          </button>
+        </div>
         <span class="badge badge-info" id="adminBadge">Denetleniyor...</span>
-        <div class="version">ParKur v0.2.0 &middot; Wubi tarzı kurulum</div>
+        <div class="version" id="versionTag">ParKur v0.2.0 · Wubi tarzı kurulum</div>
       </div>
     </aside>
 
@@ -703,17 +743,17 @@
 
         <!-- Adım 1: ISO -->
         <div class="step-page active" id="page1">
-          <h1 class="page-title">Kaynak ISO Seçin</h1>
-          <p class="page-desc">
+          <h1 class="page-title" id="page1Title">Kaynak ISO Seçin</h1>
+          <p class="page-desc" id="page1Desc">
             64-bit UEFI destekli bir Pardus veya Debian tabanlı canlı (live) ISO dosyası seçin.
             Çekirdek, initrd ve squashfs dosya sistemi bu kalıptan çıkarılır.
           </p>
 
           <div class="card">
-            <h2>ISO Dosyası</h2>
+            <h2 id="cardIsoTitle">ISO Dosyası</h2>
             <div class="input-row">
               <div class="field">
-                <label>ISO Yolu</label>
+                <label id="labelIsoPath">ISO Yolu</label>
                 <input type="text" id="isoPath" placeholder="Henüz ISO seçilmedi" readonly />
               </div>
               <button class="btn btn-ghost btn-small" id="btnSelectIso" style="margin-bottom:1px;">Gözat</button>
@@ -723,19 +763,19 @@
           </div>
 
           <div class="card">
-            <h2>Sistem Durumu</h2>
+            <h2 id="cardSystemTitle">Sistem Durumu</h2>
             <div class="sys-grid">
               <div class="sys-item">
-                <label>Donanım Yazılımı (Firmware)</label>
+                <label id="labelFirmware">Donanım Yazılımı (Firmware)</label>
                 <span id="bootModeInfo">Denetleniyor...</span>
               </div>
               <div class="sys-item">
-                <label>Yönetici Yetkisi</label>
+                <label id="labelAdminRights">Yönetici Yetkisi</label>
                 <span id="adminInfo">Denetleniyor...</span>
               </div>
               <div class="sys-item sys-item-action">
                 <div class="sys-item-main">
-                  <label>Secure Boot</label>
+                  <label id="labelSecureBoot">Secure Boot</label>
                   <span id="secureBootInfo">Denetleniyor...</span>
                   <span class="hint" id="secureBootHint"></span>
                 </div>
@@ -743,7 +783,7 @@
               </div>
               <div class="sys-item sys-item-action sys-item-wide">
                 <div class="sys-item-main">
-                  <label>Hızlı Başlatma (Fast Startup)</label>
+                  <label id="labelFastStartup">Hızlı Başlatma (Fast Startup)</label>
                   <span id="fastStartupInfo">Denetleniyor...</span>
                   <span class="hint" id="fastStartupHint"></span>
                 </div>
@@ -760,33 +800,33 @@
 
         <!-- Adım 2: Hesap -->
         <div class="step-page" id="page2">
-          <h1 class="page-title">Kullanıcı Hesabı ve Bölge</h1>
-          <p class="page-desc">
+          <h1 class="page-title" id="page2Title">Kullanıcı Hesabı ve Bölge</h1>
+          <p class="page-desc" id="page2Desc">
             Bu bilgiler ilk açılışta sistemi otomatik yapılandırmak için kullanılır.
             Yapılandırma dosyası kurulum tamamlanır tamamlanmaz güvenli şekilde silinir.
           </p>
 
           <div class="card">
-            <h2>Hesap Bilgileri</h2>
+            <h2 id="cardAccountTitle">Hesap Bilgileri</h2>
             <div class="grid-2">
               <div>
-                <label>Kullanıcı Adı <span style="color:var(--text-faint);">(küçük harf)</span></label>
+                <label><span id="labelUserName">Kullanıcı Adı</span> <span style="color:var(--text-faint);" id="labelUserNameNote">(küçük harf)</span></label>
                 <input type="text" id="userName" placeholder="örn. ayaz" oninput="formatUsername()" />
                 <span class="hint" id="userNameHint"></span>
               </div>
               <div>
-                <label>Bilgisayar Adı</label>
+                <label id="labelHostName">Bilgisayar Adı</label>
                 <input type="text" id="hostName" placeholder="örn. pardus-pc" oninput="formatHostname()" />
                 <span class="hint" id="hostNameHint"></span>
               </div>
             </div>
             <div class="grid-2" style="margin-top:6px;">
               <div>
-                <label>Parola</label>
+                <label id="labelPassword">Parola</label>
                 <input type="password" id="userPassword" placeholder="Oturum açma parolası" oninput="validateStep()" />
               </div>
               <div>
-                <label>Parola (Tekrar)</label>
+                <label id="labelPassword2">Parola (Tekrar)</label>
                 <input type="password" id="userPasswordConfirm" placeholder="Parolayı yeniden girin" oninput="validateStep()" />
                 <span class="hint" id="passwordMatchHint"></span>
               </div>
@@ -794,10 +834,10 @@
           </div>
 
           <div class="card">
-            <h2>Bölge Ayarları</h2>
+            <h2 id="cardLocaleTitle">Bölge Ayarları</h2>
             <div class="grid-2">
               <div>
-                <label>Dil / Yerel Ayar</label>
+                <label id="labelLocale">Dil / Yerel Ayar</label>
                 <select id="locale" onchange="validateStep()">
                   <option value="tr_TR.UTF-8" selected>Türkçe — tr_TR.UTF-8</option>
                   <option value="en_US.UTF-8">English (US) — en_US.UTF-8</option>
@@ -811,7 +851,7 @@
                 </select>
               </div>
               <div>
-                <label>Saat Dilimi</label>
+                <label id="labelTimezone">Saat Dilimi</label>
                 <select id="timezone" onchange="validateStep()">
                   <option value="Europe/Istanbul" selected>İstanbul (UTC+3)</option>
                   <option value="UTC">UTC</option>
@@ -828,7 +868,7 @@
                 </select>
               </div>
             </div>
-            <div class="info-box">
+            <div class="info-box" id="infoLocale">
               Klavye düzeni seçilen dile göre otomatik ayarlanır. Kullanıcı hesabına <b>sudo</b> yetkisi verilir;
               her açılışta oturum açarken parola sorulur.
             </div>
@@ -837,20 +877,20 @@
 
         <!-- Adım 3: Disk -->
         <div class="step-page" id="page3">
-          <h1 class="page-title">Disk ve İmaj Boyutu</h1>
-          <p class="page-desc">
+          <h1 class="page-title" id="page3Title">Disk ve İmaj Boyutu</h1>
+          <p class="page-desc" id="page3Desc">
             Pardus, seçtiğiniz NTFS diskteki tek bir <code style="color:var(--accent);">root.disk</code> dosyasının
             içine kurulur. Bölümler değiştirilmez, küçültülmez, veri kaybı yaşanmaz.
           </p>
 
           <div class="card">
-            <h2>Hedef Disk</h2>
+            <h2 id="cardDiskTitle">Hedef Disk</h2>
             <div id="partitionList">
               <p style="color:var(--text-dim); font-size:13px;">Uygun diskler aranıyor...</p>
             </div>
 
             <div id="sizeSliderContainer" style="display:none; margin-top:20px; padding-top:18px; border-top:1px solid var(--border-soft);">
-              <label style="font-size:13px; color:var(--text);">Pardus disk alanı (root.disk boyutu)</label>
+              <label style="font-size:13px; color:var(--text);" id="labelRootSize">Pardus disk alanı (root.disk boyutu)</label>
               <div style="display:flex; align-items:center; gap:14px; margin-top:12px;">
                 <span style="font-size:12px; color:var(--text-faint); min-width:44px;" id="sliderMin">— GB</span>
                 <input type="range" id="sizeSlider" min="1" max="50" value="20" step="1" oninput="updateSliderValue()" />
@@ -865,7 +905,7 @@
               </div>
             </div>
 
-            <div class="info-box" style="margin-top:16px;">
+            <div class="info-box" style="margin-top:16px;" id="infoSquashfs">
               <code>filesystem.squashfs</code> dosyası NTFS üzerinde kalıcı olarak durur (yalnızca <code>root.disk</code>
               içindeki ext4 dosya sistemi ilk açılışta oluşturulur). Disk alanı = squashfs + root.disk + önyükleme dosyaları.
             </div>
@@ -873,15 +913,14 @@
             <div class="warning-box" id="nextosExistsWarning" style="display:none; margin-top:12px;">
               <span style="font-size:16px;">&#9888;</span>
               <div>
-                <b>Mevcut kurulum:</b> Bu sürücüde zaten <code>NextOS\root.disk</code> var.
-                Üzerine yazmadan önce ParKur'u Kaldır ile temizleyin.
+                <b id="warnNextosTitle">Mevcut kurulum:</b> <span id="warnNextosBody">Bu sürücüde zaten <code>NextOS\root.disk</code> var. Üzerine yazmadan önce ParKur'u Kaldır ile temizleyin.</span>
               </div>
             </div>
 
             <div class="warning-box">
               <span style="font-size:16px;">&#9888;</span>
               <div>
-                <b>Hızlı Başlatma:</b> Açıksa kurulum başlamaz — Sistem Durumu kartındaki <b>Kapat</b> düğmesi ayarı otomatik kapatır.
+                <b id="warnFastTitle">Hızlı Başlatma:</b> <span id="warnFastBody">Açıksa kurulum başlamaz — Sistem Durumu kartındaki <b>Kapat</b> düğmesi ayarı otomatik kapatır.</span>
               </div>
             </div>
           </div>
@@ -889,14 +928,14 @@
 
         <!-- Adım 4: Kurulum -->
         <div class="step-page" id="page4">
-          <h1 class="page-title">Kurulum Sürüyor</h1>
-          <p class="page-desc">
+          <h1 class="page-title" id="page4Title">Kurulum Sürüyor</h1>
+          <p class="page-desc" id="page4Desc">
             Dosyalar kopyalanıyor ve önyükleyici yapılandırılıyor. Bu işlem birkaç dakika sürebilir;
             pencereyi kapatmayın.
           </p>
 
           <div class="card">
-            <h2>İlerleme</h2>
+            <h2 id="cardProgressTitle">İlerleme</h2>
             <div class="progress-wrap">
               <div class="progress-bar-bg">
                 <div class="progress-bar-fill" id="progressBar" style="width:0%;"></div>
@@ -908,9 +947,9 @@
           </div>
 
           <div class="card">
-            <h2>İşlem Günlüğü</h2>
+            <h2 id="cardLogTitle">İşlem Günlüğü</h2>
             <div class="log-area" id="logArea">
-              <div class="log-entry info">Kurulum başlatıldı</div>
+              <div class="log-entry info" id="logStartedEntry">Kurulum başlatıldı</div>
             </div>
           </div>
         </div>
@@ -945,23 +984,164 @@
   <!-- ── Kaldırma diyaloğu ── -->
   <div class="modal-backdrop" id="uninstallModal">
     <div class="modal">
-      <h3>ParKur'u Kaldır</h3>
-      <p>
+      <h3 id="modalUninstallTitle">ParKur'u Kaldır</h3>
+      <p id="modalUninstallDesc">
         <code>NextOS\root.disk</code> dosyasını barındıran sürücüyü seçin.
         Bu sürücüdeki NextOS dosyaları, ESP'deki önyükleyici ve UEFI girdisi kaldırılır;
         yedeklenen orijinal önyükleyici dosyaları geri yüklenir.
       </p>
       <div id="uninstallDriveList"></div>
       <div class="modal-actions">
-        <button class="btn btn-ghost btn-small" onclick="closeUninstallModal()">Vazgeç</button>
+        <button class="btn btn-ghost btn-small" id="btnUninstallCancel" onclick="closeUninstallModal()">Vazgeç</button>
       </div>
     </div>
   </div>
 
+  <script src="i18n.js"></script>
   <script>
     const { invoke } = window.__TAURI__.core;
     const { open } = window.__TAURI__.dialog;
     const { listen } = window.__TAURI__.event;
+    const t = (k, p) => window.ParKurI18n.t(k, p);
+    const errText = (e) => window.ParKurI18n.parseInvokeError(e);
+
+    function setUiLang(lang) {
+      window.ParKurI18n.setUiLang(lang);
+      applyStaticI18n();
+      updateLangButtons();
+      if (state.isoLayout && state.isoPath) renderIsoLayout();
+      if (state.partitions.length) loadPartitions();
+      checkSystemInfo();
+      if (state.currentStep === 5) refreshResultPage();
+      updateStepper();
+    }
+
+    function refreshResultPage() {
+      if (state.installSucceeded) {
+        document.getElementById('resultTitle').textContent = t('page5.success.title');
+        document.getElementById('resultMessage').innerHTML = t('page5.success.msg', { user: state.userName });
+      } else {
+        document.getElementById('resultTitle').textContent = t('page5.fail.title');
+        document.getElementById('resultMessage').textContent = state.lastInstallError
+          ? errText(state.lastInstallError)
+          : t('ERR_GENERIC', { detail: '' });
+      }
+    }
+
+    function updateLangButtons() {
+      const lang = window.ParKurI18n.getUiLang();
+      document.getElementById('langTr').classList.toggle('active', lang === 'tr');
+      document.getElementById('langEn').classList.toggle('active', lang === 'en');
+    }
+
+    function applyTimezoneI18n() {
+      const sel = document.getElementById('timezone');
+      if (!sel) return;
+      const val = sel.value;
+      const opts = [
+        ['Europe/Istanbul', 'tz.europe_istanbul'],
+        ['UTC', 'tz.utc'],
+        ['Europe/London', 'tz.europe_london'],
+        ['Europe/Berlin', 'tz.europe_berlin'],
+        ['Europe/Paris', 'tz.europe_paris'],
+        ['Europe/Moscow', 'tz.europe_moscow'],
+        ['America/New_York', 'tz.america_new_york'],
+        ['America/Los_Angeles', 'tz.america_los_angeles'],
+        ['Asia/Tokyo', 'tz.asia_tokyo'],
+        ['Asia/Shanghai', 'tz.asia_shanghai'],
+        ['Asia/Dubai', 'tz.asia_dubai'],
+        ['Australia/Sydney', 'tz.australia_sydney'],
+      ];
+      sel.innerHTML = opts.map(([v, k]) => '<option value="' + v + '">' + t(k) + '</option>').join('');
+      sel.value = val;
+    }
+
+    function applyStaticI18n() {
+      const text = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
+      const html = (id, key) => { const el = document.getElementById(id); if (el) el.innerHTML = t(key); };
+      const ph = (id, key) => { const el = document.getElementById(id); if (el) el.placeholder = t(key); };
+      document.title = t('app.title');
+      text('brandSub', 'brand.sub');
+      text('versionTag', 'version.tag');
+      for (let i = 1; i <= 5; i++) {
+        const keys = ['nav.iso', 'nav.user', 'nav.disk', 'nav.install', 'nav.done'];
+        text('stepLabel' + i, keys[i - 1]);
+      }
+      text('page1Title', 'page1.title');
+      html('page1Desc', 'page1.desc');
+      text('cardIsoTitle', 'card.iso');
+      text('labelIsoPath', 'label.iso_path');
+      ph('isoPath', 'placeholder.iso');
+      text('btnSelectIso', 'btn.browse');
+      if (!state.isoPath) text('isoStatus', 'iso.pick');
+      text('cardSystemTitle', 'card.system');
+      text('labelFirmware', 'label.firmware');
+      text('labelAdminRights', 'label.admin');
+      text('labelSecureBoot', 'label.secure_boot');
+      text('labelFastStartup', 'label.fast_startup');
+      text('btnFixSecureBoot', 'btn.turn_off');
+      text('btnFixFastStartup', 'btn.turn_off');
+      text('btnCleanOldEntries', 'btn.clean_boot');
+      text('btnUninstall', 'btn.uninstall');
+      text('page2Title', 'page2.title');
+      html('page2Desc', 'page2.desc');
+      text('cardAccountTitle', 'card.account');
+      text('labelUserName', 'label.username');
+      text('labelUserNameNote', 'label.username.note');
+      ph('userName', 'placeholder.username');
+      text('labelHostName', 'label.hostname');
+      ph('hostName', 'placeholder.hostname');
+      text('labelPassword', 'label.password');
+      ph('userPassword', 'placeholder.password');
+      text('labelPassword2', 'label.password2');
+      ph('userPasswordConfirm', 'placeholder.password2');
+      text('cardLocaleTitle', 'card.locale');
+      text('labelLocale', 'label.locale');
+      text('labelTimezone', 'label.timezone');
+      html('infoLocale', 'info.locale');
+      text('page3Title', 'page3.title');
+      html('page3Desc', 'page3.desc');
+      text('cardDiskTitle', 'card.disk');
+      text('labelRootSize', 'label.root_size');
+      html('infoSquashfs', 'info.squashfs');
+      html('warnNextosBody', 'warn.nextos.body');
+      text('warnNextosTitle', 'warn.nextos.title');
+      html('warnFastBody', 'warn.fast.body');
+      text('warnFastTitle', 'warn.fast.title');
+      text('page4Title', 'page4.title');
+      html('page4Desc', 'page4.desc');
+      text('cardProgressTitle', 'card.progress');
+      text('cardLogTitle', 'card.log');
+      text('progressStep', 'progress.preparing');
+      text('progressMessage', 'progress.starting');
+      text('modalUninstallTitle', 'modal.uninstall.title');
+      html('modalUninstallDesc', 'modal.uninstall.desc');
+      text('btnUninstallCancel', 'btn.cancel');
+      text('btnReboot', 'btn.reboot');
+      text('btnClose', 'btn.close');
+      text('logStartedEntry', 'log.started');
+      const sliderHint = document.getElementById('sliderRangeHint');
+      if (sliderHint && !state.selectedPartition) sliderHint.textContent = t('slider.hint_pending');
+      applyTimezoneI18n();
+      updateFastStartupUI(state.fastStartup);
+      updateSecureBootUI(state.secureBoot);
+      updateStepper();
+    }
+
+    function renderIsoLayout() {
+      const L = state.isoLayout;
+      if (!L) return;
+      const layoutBox = document.getElementById('isoLayoutInfo');
+      layoutBox.style.display = 'block';
+      layoutBox.innerHTML =
+        '<b>' + t('iso.requirements') + '</b><br>' +
+        t('iso.sq_compressed') + ': <b>' + L.squashfs_compressed_mb + ' MB</b> &middot; ' +
+        t('iso.sq_uncompressed') + ': <b>' + L.squashfs_uncompressed_mb + ' MB</b><br>' +
+        t('iso.min_root') + ': <b>' + L.min_root_disk_gb + ' GB</b> &middot; ' +
+        t('iso.suggested') + ': <b>' + L.suggested_root_disk_gb + ' GB</b>' +
+        (L.has_uefi_kernel ? '' : '<br><span style="color:var(--error);">' + t('warn.no_uefi') + '</span>') +
+        (L.has_ntfs_in_initrd ? '' : '<br><span style="color:var(--error);">' + t('warn.no_ntfs') + '</span>');
+    }
 
     const state = {
       currentStep: 1,
@@ -981,28 +1161,33 @@
       hostName: '',
       locale: 'tr_TR.UTF-8',
       timezone: 'Europe/Istanbul',
+      installSucceeded: false,
+      lastInstallError: null,
     };
 
     document.addEventListener('DOMContentLoaded', async () => {
+      applyStaticI18n();
+      updateLangButtons();
       checkSystemInfo();
       document.getElementById('btnSelectIso').addEventListener('click', selectIso);
       await listen('installation-progress', (event) => {
-        const { step, progress, message } = event.payload;
-        updateProgress(progress, prettyStep(step), message);
-        addLog('info', message);
+        const { step, progress, message_key, message_params } = event.payload;
+        const msg = t(message_key, message_params || {});
+        updateProgress(progress, prettyStep(step), msg);
+        addLog('info', msg);
       });
     });
 
     async function checkSystemInfo() {
       try {
         state.isAdmin = await invoke('check_admin');
-        document.getElementById('adminInfo').textContent = state.isAdmin ? 'Var' : 'Yok';
+        document.getElementById('adminInfo').textContent = state.isAdmin ? t('admin.yes') : t('admin.no');
         document.getElementById('adminInfo').style.color = state.isAdmin ? 'var(--success)' : 'var(--error)';
-        document.getElementById('adminBadge').textContent = state.isAdmin ? 'Yönetici' : 'Yetki Yok';
+        document.getElementById('adminBadge').textContent = state.isAdmin ? t('badge.admin') : t('badge.no_admin');
         document.getElementById('adminBadge').className = state.isAdmin ? 'badge badge-success' : 'badge badge-error';
       } catch (e) {
-        document.getElementById('adminInfo').textContent = 'Hata';
-        document.getElementById('adminBadge').textContent = 'Hata';
+        document.getElementById('adminInfo').textContent = t('badge.error');
+        document.getElementById('adminBadge').textContent = t('badge.error');
         document.getElementById('adminBadge').className = 'badge badge-error';
       }
       try {
@@ -1011,19 +1196,19 @@
         document.getElementById('bootModeInfo').style.color =
           state.bootMode === 'UEFI' ? 'var(--success)' : 'var(--error)';
       } catch (e) {
-        document.getElementById('bootModeInfo').textContent = 'Bilinmiyor';
+        document.getElementById('bootModeInfo').textContent = t('status.unknown');
       }
       try {
         const fastStartup = await invoke('check_fast_startup');
         updateFastStartupUI(!!fastStartup);
       } catch (e) {
-        document.getElementById('fastStartupInfo').textContent = 'Bilinmiyor';
+        document.getElementById('fastStartupInfo').textContent = t('status.unknown');
       }
       try {
         state.secureBoot = await invoke('detect_secure_boot');
         updateSecureBootUI(state.secureBoot);
       } catch (e) {
-        document.getElementById('secureBootInfo').textContent = 'Bilinmiyor';
+        document.getElementById('secureBootInfo').textContent = t('status.unknown');
       }
       validateStep();
     }
@@ -1034,13 +1219,14 @@
       const hint = document.getElementById('fastStartupHint');
       const btn = document.getElementById('btnFixFastStartup');
       if (enabled) {
-        info.textContent = 'Açık — kurulum engellendi';
+        info.textContent = t('fast.on');
         info.style.color = 'var(--error)';
-        hint.textContent = 'Yanındaki Kapat düğmesi ayarı otomatik kapatır.';
+        hint.textContent = t('fast.hint');
+        btn.textContent = t('btn.turn_off');
         btn.style.display = state.isAdmin ? 'inline-flex' : 'none';
         btn.disabled = !state.isAdmin;
       } else {
-        info.textContent = 'Kapalı';
+        info.textContent = t('fast.off');
         info.style.color = 'var(--success)';
         hint.textContent = '';
         btn.style.display = 'none';
@@ -1053,13 +1239,14 @@
       const sbHint = document.getElementById('secureBootHint');
       const btn = document.getElementById('btnFixSecureBoot');
       if (enabled) {
-        sbInfo.textContent = 'Açık';
+        sbInfo.textContent = t('sb.on');
         sbInfo.style.color = 'var(--warning)';
-        sbHint.textContent = 'Yanındaki Kapat düğmesi mümkünse BIOS üzerinden kapatır; gerekirse UEFI menüsüne götürür.';
+        sbHint.textContent = t('sb.hint');
+        btn.textContent = t('btn.turn_off');
         btn.style.display = state.isAdmin ? 'inline-flex' : 'none';
         btn.disabled = !state.isAdmin;
       } else {
-        sbInfo.textContent = 'Kapalı';
+        sbInfo.textContent = t('sb.off');
         sbInfo.style.color = 'var(--success)';
         sbHint.textContent = '';
         btn.style.display = 'none';
@@ -1070,18 +1257,18 @@
       const btn = document.getElementById('btnFixFastStartup');
       const hint = document.getElementById('fastStartupHint');
       if (!state.isAdmin) {
-        hint.innerHTML = '<span style="color:var(--error);">Yönetici yetkisi gerekir.</span>';
+        hint.innerHTML = '<span style="color:var(--error);">' + t('hint.admin_required') + '</span>';
         return;
       }
       btn.disabled = true;
-      hint.textContent = 'Kapatılıyor...';
+      hint.textContent = t('hint.disabling');
       hint.style.color = 'var(--text-dim)';
       try {
         await invoke('disable_fast_startup');
         updateFastStartupUI(false);
         validateStep();
       } catch (e) {
-        hint.innerHTML = '<span style="color:var(--error);">' + e + '</span>';
+        hint.innerHTML = '<span style="color:var(--error);">' + errText(e) + '</span>';
         btn.disabled = false;
       }
     }
@@ -1090,28 +1277,28 @@
       const btn = document.getElementById('btnFixSecureBoot');
       const hint = document.getElementById('secureBootHint');
       if (!state.isAdmin) {
-        hint.innerHTML = '<span style="color:var(--error);">Yönetici yetkisi gerekir.</span>';
+        hint.innerHTML = '<span style="color:var(--error);">' + t('hint.admin_required') + '</span>';
         return;
       }
-      if (!confirm('Secure Boot kapatılacak. Gerekirse bilgisayar UEFI ayarlarına yeniden başlatılır. Devam edilsin mi?')) {
+      if (!confirm(t('confirm.sb'))) {
         return;
       }
       btn.disabled = true;
-      hint.textContent = 'Ayarlanıyor...';
+      hint.textContent = t('hint.configuring');
       hint.style.color = 'var(--text-dim)';
       try {
         const result = await invoke('fix_secure_boot');
         if (result.status === 'already_off') {
           updateSecureBootUI(false);
         } else {
-          hint.innerHTML = '<span style="color:var(--warning);">' + result.message + '</span>';
+          hint.innerHTML = '<span style="color:var(--warning);">' + t(result.message_key) + '</span>';
           if (result.reboot_seconds) {
-            hint.innerHTML += ' <span style="color:var(--text-faint);">(' + result.reboot_seconds + ' sn)</span>';
+            hint.innerHTML += ' <span style="color:var(--text-faint);">(' + t('seconds', { n: result.reboot_seconds }) + ')</span>';
           }
         }
         validateStep();
       } catch (e) {
-        hint.innerHTML = '<span style="color:var(--error);">' + e + '</span>';
+        hint.innerHTML = '<span style="color:var(--error);">' + errText(e) + '</span>';
         btn.disabled = false;
       }
     }
@@ -1137,42 +1324,33 @@
       try {
         const selected = await open({
           multiple: false,
-          filters: [{ name: 'Linux ISO', extensions: ['iso'] }]
+          filters: [{ name: t('dialog.iso_filter'), extensions: ['iso'] }]
         });
         if (selected) {
           state.isoPath = selected;
           document.getElementById('isoPath').value = state.isoPath;
           document.getElementById('isoStatus').innerHTML =
-            '<span style="color:var(--success);">&#10003; Seçildi: ' + getFileName(state.isoPath) + '</span> — ISO analiz ediliyor...';
+            '<span style="color:var(--success);">' + t('iso.selected', { name: getFileName(state.isoPath) }) + '</span> — ' + t('iso.analyzing');
           state.isoLayout = null;
           document.getElementById('isoLayoutInfo').style.display = 'none';
           try {
             state.isoSizeMb = await invoke('get_iso_size_mb', { path: state.isoPath });
             state.isoLayout = await invoke('probe_iso_layout', { path: state.isoPath });
-            const L = state.isoLayout;
             document.getElementById('isoStatus').innerHTML =
-              '<span style="color:var(--success);">&#10003; Seçildi: ' + getFileName(state.isoPath) + '</span>' +
+              '<span style="color:var(--success);">' + t('iso.selected', { name: getFileName(state.isoPath) }) + '</span>' +
               ' <span style="color:var(--text-faint);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
-            const layoutBox = document.getElementById('isoLayoutInfo');
-            layoutBox.style.display = 'block';
-            layoutBox.innerHTML =
-              '<b>ISO gereksinimleri</b><br>' +
-              'Sıkıştırılmış squashfs: <b>' + L.squashfs_compressed_mb + ' MB</b> &middot; ' +
-              'Açılmış dosya sistemi: <b>' + L.squashfs_uncompressed_mb + ' MB</b><br>' +
-              'Minimum root.disk: <b>' + L.min_root_disk_gb + ' GB</b> &middot; Önerilen: <b>' + L.suggested_root_disk_gb + ' GB</b>' +
-              (L.has_uefi_kernel ? '' : '<br><span style="color:var(--error);">Uyarı: ISO içinde UEFI çekirdeği bulunamadı.</span>') +
-              (L.has_ntfs_in_initrd ? '' : '<br><span style="color:var(--error);">Uyarı: ISO initrd\'sinde NTFS desteği bulunamadı — kurulum ilk açılışta başarısız olabilir.</span>');
+            renderIsoLayout();
             if (state.selectedPartition) selectPartition(state.partitions.indexOf(state.selectedPartition));
           } catch (e) {
             state.isoLayout = null;
             document.getElementById('isoStatus').innerHTML =
-              '<span style="color:var(--error);">ISO analizi başarısız: ' + e + '</span>';
+              '<span style="color:var(--error);">' + t('iso.analyze_fail') + ': ' + errText(e) + '</span>';
           }
           validateStep();
         }
       } catch (err) {
         document.getElementById('isoStatus').innerHTML =
-          '<span style="color:var(--error);">Hata: ' + err + '</span>';
+          '<span style="color:var(--error);">' + t('err.prefix') + ': ' + errText(err) + '</span>';
       }
     }
 
@@ -1204,7 +1382,7 @@
     }
 
     async function startInstallation() {
-      addLog('info', 'Kurulum hattı başlatıldı');
+      addLog('info', t('log.pipeline'));
       try {
         await invoke('start_installation', {
           isoPath: state.isoPath,
@@ -1216,46 +1394,46 @@
           locale: state.locale,
           timezone: state.timezone,
         });
+        state.installSucceeded = true;
+        state.lastInstallError = null;
         state.currentStep = 5;
         updateStepper();
         document.getElementById('resultIcon').innerHTML = '&#10003;';
         document.getElementById('resultIcon').style.color = 'var(--success)';
-        document.getElementById('resultTitle').textContent = 'Kurulum Tamamlandı';
-        document.getElementById('resultMessage').innerHTML =
-          'Önyükleme menüsüne "NextOS" girdisi eklendi. İlk açılışta kurulum birkaç dakika sürebilir; ' +
-          'ardından oturum açarken kurulumda girdiğiniz <b>kullanıcı adı</b> (<code>' +
-          state.userName + '</code>) ve parolayı kullanın. NVRAM sıfırlanırsa <code>\\EFI\\BOOT\\BOOTX64.EFI</code> ' +
-          'yedek önyükleyicisi devreye girer.';
+        document.getElementById('resultTitle').textContent = t('page5.success.title');
+        document.getElementById('resultMessage').innerHTML = t('page5.success.msg', { user: state.userName });
       } catch (error) {
-        addLog('error', String(error));
+        addLog('error', errText(error));
+        state.installSucceeded = false;
+        state.lastInstallError = error;
         state.currentStep = 5;
         updateStepper();
         document.getElementById('resultIcon').innerHTML = '&#10007;';
         document.getElementById('resultIcon').style.color = 'var(--error)';
-        document.getElementById('resultTitle').textContent = 'Kurulum Başarısız';
-        document.getElementById('resultMessage').textContent = String(error);
+        document.getElementById('resultTitle').textContent = t('page5.fail.title');
+        document.getElementById('resultMessage').textContent = errText(error);
       }
     }
 
     async function loadPartitions() {
       const container = document.getElementById('partitionList');
-      container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Uygun diskler aranıyor...</p>';
+      container.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">' + t('disk.searching') + '</p>';
       state.selectedPartition = null;
       updateStepper();
       try {
         const partitions = await invoke('list_host_partitions');
         if (partitions.length === 0) {
-          container.innerHTML = '<p style="color:var(--error); font-size:13px;">Uygun NTFS diski bulunamadı.</p>';
+          container.innerHTML = '<p style="color:var(--error); font-size:13px;">' + t('disk.none') + '</p>';
           return;
         }
-        let html = '<div class="part-head"><span></span><span>Sürücü</span><span>Etiket</span><span style="text-align:right;">Toplam</span><span style="text-align:right;">Boş</span></div>';
+        let html = '<div class="part-head"><span></span><span>' + t('disk.head.drive') + '</span><span>' + t('disk.head.label') + '</span><span style="text-align:right;">' + t('disk.head.total') + '</span><span style="text-align:right;">' + t('disk.head.free') + '</span></div>';
         const needGb = requiredFreeGb();
         partitions.forEach((p, i) => {
           const usable = partitionUsable(p);
           let note = '';
-          if (p.bitlocker) note = 'BitLocker';
-          else if (p.has_nextos) note = 'NextOS var';
-          else if (!usable) note = 'Yetersiz alan';
+          if (p.bitlocker) note = t('disk.note.bitlocker');
+          else if (p.has_nextos) note = t('disk.note.nextos');
+          else if (!usable) note = t('disk.note.space');
           const enough = usable;
           html += '<div class="host-row' + (usable ? '' : ' disabled') + '" id="hostRow' + i + '" onclick="selectPartition(' + i + ')">';
           html += '<span class="radio"></span>';
@@ -1265,13 +1443,13 @@
           html += '<span class="num" style="color:' + (enough ? 'var(--success)' : 'var(--error)') + ';">' + p.free_gb + ' GB</span>';
           html += '</div>';
         });
-        container.innerHTML = html + '<p style="font-size:11px; color:var(--text-faint); margin-top:10px;">Gerekli boş alan (yaklaşık): <b>' + needGb.toFixed(1) + ' GB</b></p>';
+        container.innerHTML = html + '<p style="font-size:11px; color:var(--text-faint); margin-top:10px;">' + t('disk.need_space', { gb: needGb.toFixed(1) }) + '</p>';
         state.partitions = partitions;
         const firstUsable = partitions.findIndex(partitionUsable);
         if (firstUsable >= 0) selectPartition(firstUsable);
         else state.selectedPartition = null;
       } catch (err) {
-        container.innerHTML = '<p style="color:var(--error); font-size:13px;">Hata: ' + err + '</p>';
+        container.innerHTML = '<p style="color:var(--error); font-size:13px;">' + t('err.prefix') + ': ' + errText(err) + '</p>';
       }
     }
 
@@ -1310,9 +1488,8 @@
         slider.value = Math.min(Math.max(suggestedGb, minGb), maxGb);
         document.getElementById('sliderMin').textContent = minGb + ' GB';
         document.getElementById('sliderMax').textContent = maxGb + ' GB';
-        document.getElementById('sliderRangeHint').textContent =
-          'Minimum ISO\'dan hesaplanır · üst sınır boş alana göre';
-        document.getElementById('sliderFreeInfo').textContent = p.drive_letter + ':\\ üzerinde boş alan: ' + p.free_gb + ' GB';
+        document.getElementById('sliderRangeHint').textContent = t('slider.hint');
+        document.getElementById('sliderFreeInfo').textContent = t('slider.free_on', { drive: p.drive_letter, free: p.free_gb });
         updateSliderValue();
         container.style.display = 'block';
       } else {
@@ -1332,17 +1509,17 @@
       const btn = document.getElementById('btnCleanOldEntries');
       const status = document.getElementById('cleanupStatus');
       btn.disabled = true;
-      status.textContent = 'Taranıyor...';
+      status.textContent = t('cleanup.scanning');
       status.style.color = 'var(--text-dim)';
       try {
         const deleted = await invoke('cleanup_old_boot_entries');
         if (deleted.length === 0) {
-          status.innerHTML = '<span style="color:var(--success);">&#10003; Eski girdi bulunamadı.</span>';
+          status.innerHTML = '<span style="color:var(--success);">' + t('cleanup.none') + '</span>';
         } else {
-          status.innerHTML = '<span style="color:var(--success);">&#10003; ' + deleted.length + ' girdi kaldırıldı.</span>';
+          status.innerHTML = '<span style="color:var(--success);">' + t('cleanup.removed', { n: deleted.length }) + '</span>';
         }
       } catch (e) {
-        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
+        status.innerHTML = '<span style="color:var(--error);">' + t('err.prefix') + ': ' + errText(e) + '</span>';
       }
       btn.disabled = false;
     }
@@ -1355,7 +1532,7 @@
         const partitions = await invoke('list_host_partitions');
         const installed = partitions.filter((p) => p.has_nextos);
         if (!installed.length) {
-          status.innerHTML = '<span style="color:var(--warning);">Kaldırılacak NextOS kurulumu bulunamadı.</span>';
+          status.innerHTML = '<span style="color:var(--warning);">' + t('uninstall.none') + '</span>';
           return;
         }
         list.innerHTML = '';
@@ -1364,13 +1541,13 @@
           btn.className = 'drive-option';
           btn.innerHTML =
             '<span><b>' + p.drive_letter + ':\\</b> &nbsp;' + p.label + '</span>' +
-            '<small>' + p.size_gb + ' GB &middot; boş ' + p.free_gb + ' GB</small>';
+            '<small>' + t('uninstall.drive_free', { size: p.size_gb, free: p.free_gb }) + '</small>';
           btn.addEventListener('click', () => runUninstall(p.drive_letter));
           list.appendChild(btn);
         });
         document.getElementById('uninstallModal').classList.add('open');
       } catch (e) {
-        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
+        status.innerHTML = '<span style="color:var(--error);">' + t('err.prefix') + ': ' + errText(e) + '</span>';
       }
     }
 
@@ -1382,13 +1559,13 @@
       closeUninstallModal();
       const status = document.getElementById('cleanupStatus');
       const drive = String(driveLetter).trim().replace(':', '').toUpperCase();
-      status.textContent = drive + ':\\ üzerinden kaldırılıyor...';
+      status.textContent = t('uninstall.removing', { drive: drive });
       status.style.color = 'var(--text-dim)';
       try {
         await invoke('uninstall_nextos', { hostDriveLetter: drive });
-        status.innerHTML = '<span style="color:var(--success);">&#10003; ParKur ' + drive + ':\\ üzerinden temiz şekilde kaldırıldı.</span>';
+        status.innerHTML = '<span style="color:var(--success);">' + t('uninstall.ok', { drive: drive }) + '</span>';
       } catch (e) {
-        status.innerHTML = '<span style="color:var(--error);">Hata: ' + e + '</span>';
+        status.innerHTML = '<span style="color:var(--error);">' + t('err.prefix') + ': ' + errText(e) + '</span>';
       }
     }
 
@@ -1396,7 +1573,7 @@
       try {
         await invoke('reboot_now');
       } catch (e) {
-        alert('Yeniden başlatma başarısız: ' + e);
+        alert(t('reboot.fail') + ': ' + errText(e));
       }
     }
 
@@ -1429,7 +1606,7 @@
       const btnBack = document.getElementById('btnBack');
       if (state.currentStep === 1) {
         btnStart.style.display = 'inline-flex';
-        btnStart.innerHTML = 'İleri &rarr;';
+        btnStart.innerHTML = t('btn.next');
         btnStart.disabled = !(
           isoReadyForInstall() &&
           state.isAdmin && state.bootMode === 'UEFI' && !state.fastStartup
@@ -1437,14 +1614,16 @@
         btnBack.style.display = 'none';
       } else if (state.currentStep === 2) {
         btnStart.style.display = 'inline-flex';
-        btnStart.innerHTML = 'İleri &rarr;';
+        btnStart.innerHTML = t('btn.next');
         btnStart.disabled = !validateUserInfo();
         btnBack.style.display = 'inline-flex';
+        btnBack.innerHTML = t('btn.back').replace('←', '&larr;');
       } else if (state.currentStep === 3) {
         btnStart.style.display = 'inline-flex';
-        btnStart.innerHTML = 'Kurulumu Başlat';
+        btnStart.innerHTML = t('btn.start_install');
         btnStart.disabled = !state.selectedPartition || !partitionUsable(state.selectedPartition);
         btnBack.style.display = 'inline-flex';
+        btnBack.innerHTML = t('btn.back').replace('←', '&larr;');
       } else {
         btnStart.style.display = 'none';
         btnBack.style.display = 'none';
@@ -1481,10 +1660,10 @@
       if (hostName.length > 63) return false;
       if (password.length < 4) return false;
       if (password !== passwordConfirm) {
-        if (hint) hint.innerHTML = '<span style="color:var(--error);">Parolalar eşleşmiyor</span>';
+        if (hint) hint.innerHTML = '<span style="color:var(--error);">' + t('hint.pass_mismatch') + '</span>';
         return false;
       } else {
-        if (hint) hint.innerHTML = '<span style="color:var(--success);">&#10003; Parolalar eşleşiyor</span>';
+        if (hint) hint.innerHTML = '<span style="color:var(--success);">' + t('hint.pass_match') + '</span>';
       }
       return true;
     }
@@ -1496,9 +1675,9 @@
       if (val && !/^[a-z]/.test(val)) val = val.replace(/^[^a-z]+/, '');
       input.value = val;
       if (val && /^[a-z][a-z0-9_-]*$/.test(val)) {
-        hint.innerHTML = '<span style="color:var(--success);">&#10003; Uygun</span>';
+        hint.innerHTML = '<span style="color:var(--success);">' + t('hint.ok') + '</span>';
       } else if (val) {
-        hint.innerHTML = '<span style="color:var(--error);">Küçük harfle başlamalı</span>';
+        hint.innerHTML = '<span style="color:var(--error);">' + t('hint.user_start') + '</span>';
       } else {
         hint.textContent = '';
       }
@@ -1511,9 +1690,9 @@
       let val = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
       input.value = val;
       if (val && /^[a-z0-9][a-z0-9-]*$/.test(val)) {
-        hint.innerHTML = '<span style="color:var(--success);">&#10003; Uygun</span>';
+        hint.innerHTML = '<span style="color:var(--success);">' + t('hint.ok') + '</span>';
       } else if (val) {
-        hint.innerHTML = '<span style="color:var(--error);">Yalnızca küçük harf, rakam ve tire</span>';
+        hint.innerHTML = '<span style="color:var(--error);">' + t('hint.host_chars') + '</span>';
       } else {
         hint.textContent = '';
       }
@@ -1533,7 +1712,7 @@
         bar.style.width = '100%';
         bar.style.background = 'var(--error)';
         bar.style.animation = 'none';
-        pct.textContent = 'HATA';
+        pct.textContent = t('progress.error');
         pct.style.color = 'var(--error)';
       }
       stepEl.textContent = stepName;
@@ -1543,30 +1722,32 @@
     function addLog(type, message) {
       const logArea = document.getElementById('logArea');
       const time = new Date().toLocaleTimeString();
-      const prefix = { info: 'BİLGİ', success: 'TAMAM', error: 'HATA', warn: 'UYARI' };
+      const prefix = { info: t('log.info'), success: t('log.ok'), error: t('log.err'), warn: t('log.warn') };
       const entry = document.createElement('div');
       entry.className = 'log-entry ' + type;
-      entry.textContent = '[' + time + '] [' + (prefix[type] || 'BİLGİ') + '] ' + message;
+      entry.textContent = '[' + time + '] [' + (prefix[type] || t('log.info')) + '] ' + message;
       logArea.appendChild(entry);
       logArea.scrollTop = logArea.scrollHeight;
-    }
-
-    function prettyStep(step) {
-      const map = {
-        verify: 'Doğrulama',
-        iso: 'ISO İşleme',
-        image: 'İmaj Oluşturma',
-        boot: 'Önyükleyici',
-        done: 'Tamamlandı',
-      };
-      return map[step] || step;
     }
 
     function getFileName(path) {
       return path.split('\\').pop().split('/').pop();
     }
 
+    function prettyStep(step) {
+      const map = {
+        verify: t('step.verify'),
+        iso: t('step.iso'),
+        image: t('step.image'),
+        boot: t('step.boot'),
+        done: t('step.done'),
+      };
+      return map[step] || step;
+    }
+
     updateStepper();
+    applyStaticI18n();
+    updateLangButtons();
   </script>
 </body>
 </html>
