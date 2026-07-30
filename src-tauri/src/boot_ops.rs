@@ -92,6 +92,130 @@ pub fn mount_esp() -> Result<String, InstallerError> {
     Ok(letter)
 }
 
+fn is_pe_efi(path: &Path) -> bool {
+    use std::io::Read;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut mag = [0u8; 2];
+    if f.read(&mut mag).ok() != Some(2) {
+        return false;
+    }
+    // PE/COFF "MZ" — reject empty stubs and random non-EFI files.
+    mag == [0x4D, 0x5A] && std::fs::metadata(path).map(|m| m.len() >= 1024).unwrap_or(false)
+}
+
+fn try_copy_efi_file(src: &Path, esp_nextos: &str, copied: &mut Vec<String>) {
+    let Some(name_os) = src.file_name() else {
+        return;
+    };
+    let name_lower = name_os.to_string_lossy().to_lowercase();
+    if !src.is_file() || !name_lower.ends_with(".efi") || copied.contains(&name_lower) {
+        return;
+    }
+    if !is_pe_efi(src) {
+        return;
+    }
+    let dest = format!("{}\\{}", esp_nextos, name_os.to_string_lossy());
+    if std::fs::copy(src, &dest).is_ok() {
+        copied.push(name_lower);
+    }
+}
+
+fn collect_efi_from_dir(dir: &Path, esp_nextos: &str, copied: &mut Vec<String>, depth: u32) {
+    if depth > 4 || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_efi_from_dir(&path, esp_nextos, copied, depth + 1);
+        } else {
+            try_copy_efi_file(&path, esp_nextos, copied);
+        }
+    }
+}
+
+/// Windows Mount-DiskImage sometimes hides `/EFI/boot/*.efi` on hybrid ISOs.
+/// Pardus/Debian still ship a FAT `efi.img` we can mount separately.
+fn collect_efi_from_efi_img(
+    iso_drive_letter: &str,
+    esp_nextos: &str,
+    copied: &mut Vec<String>,
+) -> Result<(), InstallerError> {
+    let iso_root = format!("{}:\\", iso_drive_letter.trim_end_matches(':'));
+    let candidates = [
+        format!("{}efi.img", iso_root),
+        format!("{}boot\\grub\\efi.img", iso_root),
+        format!("{}EFI\\boot\\efi.img", iso_root),
+    ];
+    let img_src = candidates.into_iter().find(|p| Path::new(p).is_file());
+    let Some(img_src) = img_src else {
+        return Ok(());
+    };
+
+    let temp = std::env::temp_dir().join(format!(
+        "parkur-efi-{}.img",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    ));
+    std::fs::copy(&img_src, &temp).map_err(|e| {
+        InstallerError::BootloaderConfig(format!("efi.img copy failed: {}", e))
+    })?;
+    let temp_str = temp.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        r#"
+        $path = '{temp}'
+        $img = Mount-DiskImage -ImagePath $path -PassThru -ErrorAction Stop
+        $letter = $null
+        for ($i = 0; $i -lt 40; $i++) {{
+            $vol = $img | Get-Volume -ErrorAction SilentlyContinue
+            if ($vol -and $vol.DriveLetter) {{ $letter = [string]$vol.DriveLetter; break }}
+            Start-Sleep -Milliseconds 250
+        }}
+        if (-not $letter) {{ throw "efi.img mounted but no drive letter" }}
+        $letter
+        "#,
+        temp = temp_str
+    );
+
+    let mount_result = run_powershell(&script);
+    let letter = match mount_result {
+        Ok(out) => out.trim().to_string(),
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            return Err(InstallerError::BootloaderConfig(format!(
+                "efi.img mount failed: {}",
+                e
+            )));
+        }
+    };
+
+    if letter.len() == 1 {
+        let efi_root = format!("{}:\\EFI", letter);
+        collect_efi_from_dir(Path::new(&efi_root), esp_nextos, copied, 0);
+        // Some images put bootx64.efi at the volume root
+        if let Ok(entries) = std::fs::read_dir(format!("{}:\\", letter)) {
+            for entry in entries.flatten() {
+                try_copy_efi_file(&entry.path(), esp_nextos, copied);
+            }
+        }
+    }
+
+    let _ = run_powershell(&format!(
+        "Dismount-DiskImage -ImagePath '{}' -ErrorAction SilentlyContinue",
+        temp_str
+    ));
+    let _ = std::fs::remove_file(&temp);
+    Ok(())
+}
+
 /// Copy the complete EFI boot chain from the ISO to the ESP.
 ///
 /// Returns the EFI path string (e.g. `\EFI\NextOS\shimx64.efi`) that should be
@@ -102,56 +226,40 @@ pub fn copy_efi_payload_from_iso(
     iso_drive_letter: &str,
     esp_letter: &str,
 ) -> Result<String, InstallerError> {
-    let iso_root = format!("{}:\\", iso_drive_letter);
-
-    // Directories on the ISO that may contain EFI binaries, in search order
-    let iso_efi_dirs = [
-        format!("{}EFI\\BOOT", iso_root),
-        format!("{}EFI\\Boot", iso_root),
-        format!("{}EFI\\boot", iso_root),
-        format!("{}EFI\\debian", iso_root),
-    ];
-
+    let iso_root = format!("{}:\\", iso_drive_letter.trim_end_matches(':'));
     let esp_nextos = format!("{}:\\{}", esp_letter, ESP_NEXTOS_DIR);
-
-    // Create destination directory (direct fs call — the process is elevated,
-    // no need to spawn PowerShell for a mkdir)
     let _ = std::fs::create_dir_all(&esp_nextos);
 
-    // Collect lowercase names of .efi files that were successfully copied
     let mut copied: Vec<String> = Vec::new();
-    for dir in &iso_efi_dirs {
-        let dir_path = Path::new(dir);
-        if !dir_path.exists() {
-            continue;
-        }
-        if let Ok(entries) = std::fs::read_dir(dir_path) {
-            for entry in entries.flatten() {
-                let src = entry.path();
-                let name_os = entry.file_name();
-                let name_lower = name_os.to_string_lossy().to_lowercase();
-                if !src.is_file() || !name_lower.ends_with(".efi") {
-                    continue;
-                }
-                // Verify PE/COFF magic
-                if let Ok(data) = std::fs::read(&src) {
-                    if data.len() < 1024
-                        || data.first() != Some(&0x4D)
-                        || data.get(1) != Some(&0x5A)
-                    {
-                        continue;
-                    }
-                    let dest = format!("{}\\{}", esp_nextos, name_os.to_string_lossy());
-                    // Don't overwrite a file we already placed (first dir wins)
-                    if copied.contains(&name_lower) {
-                        continue;
-                    }
-                    if std::fs::copy(&src, &dest).is_ok() {
-                        copied.push(name_lower);
-                    }
-                }
-            }
-        }
+
+    // 1) Direct known paths (Pardus/Debian live: /EFI/boot/{boot,grub,mm}x64.efi)
+    for rel in [
+        "EFI\\boot\\bootx64.efi",
+        "EFI\\boot\\grubx64.efi",
+        "EFI\\boot\\mmx64.efi",
+        "EFI\\boot\\shimx64.efi",
+        "EFI\\BOOT\\BOOTX64.EFI",
+        "EFI\\BOOT\\grubx64.efi",
+        "EFI\\debian\\shimx64.efi",
+        "EFI\\debian\\grubx64.efi",
+        "EFI\\pardus\\shimx64.efi",
+        "EFI\\pardus\\grubx64.efi",
+    ] {
+        try_copy_efi_file(Path::new(&format!("{}{}", iso_root, rel)), &esp_nextos, &mut copied);
+    }
+
+    // 2) Walk any EFI directory Windows exposes on the mounted ISO
+    for dir in [
+        format!("{}EFI", iso_root),
+        format!("{}efi", iso_root),
+    ] {
+        collect_efi_from_dir(Path::new(&dir), &esp_nextos, &mut copied, 0);
+    }
+
+    // 3) Fallback: mount the hybrid ISO's FAT efi.img (common when Windows
+    // hides /EFI/boot on the ISO9660 session).
+    if copied.is_empty() {
+        let _ = collect_efi_from_efi_img(iso_drive_letter, &esp_nextos, &mut copied);
     }
 
     if copied.is_empty() {
@@ -174,7 +282,6 @@ pub fn copy_efi_payload_from_iso(
     } else if copied.contains(&"grubx64.efi".to_string()) {
         "grubx64.efi"
     } else {
-        // Last resort: first file we copied
         return Err(InstallerError::coded(
             InstallerError::BootloaderConfig,
             "ERR_NO_BOOT_APP",
@@ -189,15 +296,11 @@ pub fn copy_efi_payload_from_iso(
     let esp_boot_dir = format!("{}:\\{}", esp_letter, ESP_REMOVABLE_DIR);
     let _ = std::fs::create_dir_all(&esp_boot_dir);
 
-    // Copy the chosen boot EFI as BOOTX64.EFI (the fallback entry).
-    // The machine's original fallback bootloader is backed up first so
-    // uninstall can put it back.
     let primary_src = format!("{}\\{}", esp_nextos, boot_name);
     let removable_dest = format!("{}\\{}", esp_boot_dir, ESP_REMOVABLE_FILE);
     backup_esp_file_once(&removable_dest);
     let _ = std::fs::copy(&primary_src, &removable_dest);
 
-    // Copy grubx64.efi to EFI\BOOT\ so shim can find it when loaded from there
     if boot_name != "grubx64.efi" {
         let grub_src = format!("{}\\grubx64.efi", esp_nextos);
         let grub_fallback = format!("{}\\grubx64.efi", esp_boot_dir);

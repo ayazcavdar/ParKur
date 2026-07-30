@@ -63,12 +63,19 @@ pub fn mount_iso(iso_path: &str) -> Result<String, InstallerError> {
         ));
     }
 
+    validate_iso_file(iso_path)?;
+
     let _ = unmount_iso(iso_path);
 
     // Poll for the volume instead of a fixed sleep — usually ready in <500ms.
     let script = format!(
         r#"
-        $img = Mount-DiskImage -ImagePath '{}' -PassThru -ErrorAction Stop
+        $path = '{}'
+        try {{
+            $img = Mount-DiskImage -ImagePath $path -PassThru -ErrorAction Stop
+        }} catch {{
+            throw ("MOUNT_FAIL:" + $_.Exception.Message)
+        }}
         $letter = $null
         for ($i = 0; $i -lt 40; $i++) {{
             $vol = $img | Get-Volume -ErrorAction SilentlyContinue
@@ -76,22 +83,82 @@ pub fn mount_iso(iso_path: &str) -> Result<String, InstallerError> {
             Start-Sleep -Milliseconds 250
         }}
         if ($letter) {{ $letter }}
-        else {{ throw "ISO mounted but no drive letter assigned" }}
+        else {{ throw "MOUNT_FAIL:ISO mounted but no drive letter assigned" }}
         "#,
         iso_path.replace('\'', "''")
     );
 
-    let output = run_powershell(&script)
-        .map_err(|e| InstallerError::IsoExtraction(format!("ISO mount failed: {}", e)))?;
+    let output = run_powershell(&script).map_err(|e| {
+        let detail = e.to_string();
+        let lower = detail.to_ascii_lowercase();
+        let hint = if lower.contains("being used")
+            || lower.contains("in use")
+            || lower.contains("cannot access")
+            || lower.contains("denied")
+        {
+            "ERR_ISO_MOUNT_LOCKED"
+        } else {
+            "ERR_ISO_MOUNT_FAILED"
+        };
+        InstallerError::coded(
+            InstallerError::IsoExtraction,
+            hint,
+            &[("detail", detail.trim())],
+        )
+    })?;
 
     let letter = output.trim().to_string();
     if letter.len() != 1 || !letter.chars().next().unwrap_or(' ').is_ascii_alphabetic() {
-        return Err(InstallerError::IsoExtraction(format!(
-            "Invalid ISO drive letter: '{}'",
-            letter
-        )));
+        return Err(InstallerError::coded(
+            InstallerError::IsoExtraction,
+            "ERR_ISO_MOUNT_FAILED",
+            &[("detail", &format!("invalid drive letter '{letter}'"))],
+        ));
     }
     Ok(letter)
+}
+
+/// Reject archives misnamed as .iso (WinRAR/7-Zip) and non-ISO9660 payloads.
+fn validate_iso_file(iso_path: &str) -> Result<(), InstallerError> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f = std::fs::File::open(iso_path)
+        .map_err(|e| InstallerError::Io(format!("ISO open failed: {e}")))?;
+    let mut head = [0u8; 16];
+    let n = f.read(&mut head).unwrap_or(0);
+    if (n >= 7 && &head[0..7] == b"Rar!\x1a\x07\x00")
+        || (n >= 8 && &head[0..8] == b"Rar!\x1a\x07\x01\x00")
+        || (n >= 4 && &head[0..4] == b"7z\xbc\xaf")
+        || (n >= 4 && &head[0..4] == b"PK\x03\x04")
+    {
+        return Err(InstallerError::coded(
+            InstallerError::InvalidInput,
+            "ERR_ISO_IS_ARCHIVE",
+            &[],
+        ));
+    }
+
+    // ISO 9660 Primary Volume Descriptor: "CD001" at sector 16 (offset 0x8001).
+    const CD001_OFFSETS: &[u64] = &[0x8001, 0x8801, 0x9001];
+    let mut found = false;
+    for &off in CD001_OFFSETS {
+        let mut magic = [0u8; 5];
+        if f.seek(SeekFrom::Start(off)).is_err() {
+            continue;
+        }
+        if f.read_exact(&mut magic).is_ok() && &magic == b"CD001" {
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err(InstallerError::coded(
+            InstallerError::InvalidInput,
+            "ERR_ISO_INVALID",
+            &[],
+        ));
+    }
+    Ok(())
 }
 
 pub fn unmount_iso(iso_path: &str) -> Result<(), InstallerError> {

@@ -43,20 +43,20 @@ fn entry(id: &str, version: &str, desktop: &str, filename: &str) -> IsoCatalogEn
     }
 }
 
-/// Fixed catalog: latest Pardus 25.x desktop editions only.
+/// Fixed catalog: Pardus 25.0 desktop editions (XFCE + GNOME).
 pub fn iso_catalog() -> Vec<IsoCatalogEntry> {
     vec![
         entry(
-            "pardus-25.2-xfce",
-            "25.2",
+            "pardus-25.0-xfce",
+            "25.0",
             "XFCE",
-            "Pardus-25.2-XFCE-amd64.iso",
+            "Pardus-25.0-XFCE-amd64.iso",
         ),
         entry(
-            "pardus-25.2-gnome",
-            "25.2",
+            "pardus-25.0-gnome",
+            "25.0",
             "GNOME",
-            "Pardus-25.2-GNOME-amd64.iso",
+            "Pardus-25.0-GNOME-amd64.iso",
         ),
     ]
 }
