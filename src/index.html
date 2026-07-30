@@ -158,8 +158,6 @@
       gap: 8px;
     }
 
-    .version { font-size: 11px; color: var(--text-faint); }
-
     .lang-switch {
       display: flex;
       gap: 6px;
@@ -191,6 +189,66 @@
     }
 
     .lang-flag { font-size: 15px; line-height: 1; }
+
+    .iso-source-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .iso-source-tab {
+      flex: 1;
+      padding: 9px 12px;
+      font-size: 12.5px;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--text-dim);
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+
+    .iso-source-tab:hover { border-color: var(--text-faint); color: var(--text); }
+    .iso-source-tab.active {
+      border-color: var(--accent-border);
+      color: var(--accent-soft);
+      background: var(--accent-dim);
+    }
+
+    .iso-download-progress {
+      display: none;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .iso-download-progress.visible { display: block; }
+
+    .iso-dl-bar-track {
+      height: 8px;
+      border-radius: 4px;
+      background: var(--bg-inset);
+      border: 1px solid var(--border-soft);
+      overflow: hidden;
+      margin: 8px 0 6px;
+    }
+
+    .iso-dl-bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--accent-soft), var(--accent));
+      transition: width 0.2s ease;
+    }
+
+    .iso-dl-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-faint);
+    }
 
     /* ── Main area ───────────────────────────────────── */
     .main {
@@ -733,7 +791,6 @@
           </button>
         </div>
         <span class="badge badge-info" id="adminBadge">Denetleniyor...</span>
-        <div class="version" id="versionTag">ParKur v0.2.0 · Wubi tarzı kurulum</div>
       </div>
     </aside>
 
@@ -751,14 +808,40 @@
 
           <div class="card">
             <h2 id="cardIsoTitle">ISO Dosyası</h2>
-            <div class="input-row">
-              <div class="field">
-                <label id="labelIsoPath">ISO Yolu</label>
-                <input type="text" id="isoPath" placeholder="Henüz ISO seçilmedi" readonly />
-              </div>
-              <button class="btn btn-ghost btn-small" id="btnSelectIso" style="margin-bottom:1px;">Gözat</button>
+            <div class="iso-source-tabs" role="tablist">
+              <button type="button" class="iso-source-tab active" id="tabIsoLocal" onclick="setIsoSource('local')">Dosyadan seç</button>
+              <button type="button" class="iso-source-tab" id="tabIsoDownload" onclick="setIsoSource('download')">İndir</button>
             </div>
-            <div id="isoStatus" style="font-size:12px; color:var(--text-dim);">Lütfen bir ISO dosyası seçin.</div>
+
+            <div id="isoLocalPanel">
+              <div class="input-row">
+                <div class="field">
+                  <label id="labelIsoPath">ISO Yolu</label>
+                  <input type="text" id="isoPath" placeholder="Henüz ISO seçilmedi" readonly />
+                </div>
+                <button class="btn btn-ghost btn-small" id="btnSelectIso" style="margin-bottom:1px;">Gözat</button>
+              </div>
+            </div>
+
+            <div id="isoDownloadPanel" style="display:none;">
+              <label id="labelIsoCatalog">Sürüm</label>
+              <select id="isoCatalogSelect"></select>
+              <p id="isoDownloadDirHint" style="font-size:11px; color:var(--text-faint); margin:8px 0 12px;"></p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-primary btn-small" id="btnDownloadIso" onclick="startIsoDownload()">İndir</button>
+                <button type="button" class="btn btn-ghost btn-small" id="btnCancelIsoDownload" onclick="cancelIsoDownload()" style="display:none;">İptal</button>
+              </div>
+              <div class="iso-download-progress" id="isoDownloadProgress">
+                <div id="isoDownloadPhase" style="font-size:12px; color:var(--text-dim);"></div>
+                <div class="iso-dl-bar-track"><div class="iso-dl-bar-fill" id="isoDownloadBar"></div></div>
+                <div class="iso-dl-meta">
+                  <span id="isoDownloadBytes"></span>
+                  <span id="isoDownloadPct">0%</span>
+                </div>
+              </div>
+            </div>
+
+            <div id="isoStatus" style="font-size:12px; color:var(--text-dim); margin-top:12px;">Lütfen bir ISO dosyası seçin.</div>
             <div id="isoLayoutInfo" style="display:none; margin-top:14px; padding:12px 14px; background:var(--surface-2); border-radius:8px; font-size:12px; color:var(--text-dim); line-height:1.6;"></div>
           </div>
 
@@ -1062,7 +1145,6 @@
       const ph = (id, key) => { const el = document.getElementById(id); if (el) el.placeholder = t(key); };
       document.title = t('app.title');
       text('brandSub', 'brand.sub');
-      text('versionTag', 'version.tag');
       for (let i = 1; i <= 5; i++) {
         const keys = ['nav.iso', 'nav.user', 'nav.disk', 'nav.install', 'nav.done'];
         text('stepLabel' + i, keys[i - 1]);
@@ -1070,9 +1152,19 @@
       text('page1Title', 'page1.title');
       html('page1Desc', 'page1.desc');
       text('cardIsoTitle', 'card.iso');
+      text('tabIsoLocal', 'iso.tab.local');
+      text('tabIsoDownload', 'iso.tab.download');
       text('labelIsoPath', 'label.iso_path');
       ph('isoPath', 'placeholder.iso');
       text('btnSelectIso', 'btn.browse');
+      text('labelIsoCatalog', 'iso.label.catalog');
+      text('btnDownloadIso', 'iso.download.start');
+      text('btnCancelIsoDownload', 'iso.download.cancel');
+      if (state.isoDownloadDir) {
+        document.getElementById('isoDownloadDirHint').textContent =
+          t('iso.download.dir', { dir: state.isoDownloadDir });
+      }
+      populateIsoCatalogSelect();
       if (!state.isoPath) text('isoStatus', 'iso.pick');
       text('cardSystemTitle', 'card.system');
       text('labelFirmware', 'label.firmware');
@@ -1149,6 +1241,10 @@
       isoPath: '',
       isoSizeMb: 0,
       isoLayout: null,
+      isoSource: 'local',
+      isoCatalog: [],
+      isoDownloadDir: '',
+      isoDownloading: false,
       isAdmin: false,
       bootMode: '',
       fastStartup: false,
@@ -1170,13 +1266,115 @@
       updateLangButtons();
       checkSystemInfo();
       document.getElementById('btnSelectIso').addEventListener('click', selectIso);
+      try {
+        state.isoCatalog = await invoke('list_iso_catalog');
+        state.isoDownloadDir = await invoke('get_iso_download_dir');
+        populateIsoCatalogSelect();
+        document.getElementById('isoDownloadDirHint').textContent =
+          t('iso.download.dir', { dir: state.isoDownloadDir });
+      } catch (e) {
+        console.warn('iso catalog init failed', e);
+      }
       await listen('installation-progress', (event) => {
         const { step, progress, message_key, message_params } = event.payload;
         const msg = t(message_key, message_params || {});
         updateProgress(progress, prettyStep(step), msg);
         addLog('info', msg);
       });
+      await listen('iso-download-progress', (event) => {
+        updateIsoDownloadProgress(event.payload);
+      });
     });
+
+    function setIsoSource(mode) {
+      state.isoSource = mode === 'download' ? 'download' : 'local';
+      document.getElementById('tabIsoLocal').classList.toggle('active', state.isoSource === 'local');
+      document.getElementById('tabIsoDownload').classList.toggle('active', state.isoSource === 'download');
+      document.getElementById('isoLocalPanel').style.display = state.isoSource === 'local' ? 'block' : 'none';
+      document.getElementById('isoDownloadPanel').style.display = state.isoSource === 'download' ? 'block' : 'none';
+    }
+
+    function populateIsoCatalogSelect() {
+      const sel = document.getElementById('isoCatalogSelect');
+      if (!sel) return;
+      const prev = sel.value;
+      sel.innerHTML = (state.isoCatalog || []).map((e) =>
+        '<option value="' + e.id + '">' +
+        t('iso.catalog.item', { version: e.version, desktop: e.desktop }) +
+        '</option>'
+      ).join('');
+      if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    }
+
+    function updateIsoDownloadProgress(p) {
+      const box = document.getElementById('isoDownloadProgress');
+      box.classList.add('visible');
+      const phaseKey = {
+        preparing: 'iso.download.preparing',
+        downloading: 'iso.download.downloading',
+        verifying: 'iso.download.verifying',
+        done: 'iso.download.done',
+      }[p.phase] || 'iso.download.downloading';
+      document.getElementById('isoDownloadPhase').textContent = t(phaseKey);
+      document.getElementById('isoDownloadBar').style.width = (p.percent || 0) + '%';
+      document.getElementById('isoDownloadPct').textContent = (p.percent || 0) + '%';
+      if (p.total_mb > 0) {
+        document.getElementById('isoDownloadBytes').textContent =
+          t('iso.download.bytes', { done: p.downloaded_mb, total: p.total_mb });
+      } else {
+        document.getElementById('isoDownloadBytes').textContent = '';
+      }
+    }
+
+    async function startIsoDownload() {
+      const id = document.getElementById('isoCatalogSelect').value;
+      if (!id || state.isoDownloading) return;
+      state.isoDownloading = true;
+      document.getElementById('btnDownloadIso').disabled = true;
+      document.getElementById('btnCancelIsoDownload').style.display = 'inline-flex';
+      document.getElementById('isoDownloadProgress').classList.add('visible');
+      document.getElementById('isoStatus').textContent = t('iso.download.preparing');
+      try {
+        const path = await invoke('download_iso', { id });
+        await applyIsoPath(path);
+      } catch (e) {
+        document.getElementById('isoStatus').innerHTML =
+          '<span style="color:var(--error);">' + t('err.prefix') + ': ' + errText(e) + '</span>';
+      } finally {
+        state.isoDownloading = false;
+        document.getElementById('btnDownloadIso').disabled = false;
+        document.getElementById('btnCancelIsoDownload').style.display = 'none';
+      }
+    }
+
+    async function cancelIsoDownload() {
+      try {
+        await invoke('cancel_iso_download');
+      } catch (_) { /* ignore */ }
+    }
+
+    async function applyIsoPath(path) {
+      state.isoPath = path;
+      document.getElementById('isoPath').value = state.isoPath;
+      document.getElementById('isoStatus').innerHTML =
+        '<span style="color:var(--success);">' + t('iso.selected', { name: getFileName(state.isoPath) }) + '</span> — ' + t('iso.analyzing');
+      state.isoLayout = null;
+      document.getElementById('isoLayoutInfo').style.display = 'none';
+      try {
+        state.isoSizeMb = await invoke('get_iso_size_mb', { path: state.isoPath });
+        state.isoLayout = await invoke('probe_iso_layout', { path: state.isoPath });
+        document.getElementById('isoStatus').innerHTML =
+          '<span style="color:var(--success);">' + t('iso.selected', { name: getFileName(state.isoPath) }) + '</span>' +
+          ' <span style="color:var(--text-faint);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
+        renderIsoLayout();
+        if (state.selectedPartition) selectPartition(state.partitions.indexOf(state.selectedPartition));
+      } catch (e) {
+        state.isoLayout = null;
+        document.getElementById('isoStatus').innerHTML =
+          '<span style="color:var(--error);">' + t('iso.analyze_fail') + ': ' + errText(e) + '</span>';
+      }
+      validateStep();
+    }
 
     async function checkSystemInfo() {
       try {
@@ -1327,26 +1525,7 @@
           filters: [{ name: t('dialog.iso_filter'), extensions: ['iso'] }]
         });
         if (selected) {
-          state.isoPath = selected;
-          document.getElementById('isoPath').value = state.isoPath;
-          document.getElementById('isoStatus').innerHTML =
-            '<span style="color:var(--success);">' + t('iso.selected', { name: getFileName(state.isoPath) }) + '</span> — ' + t('iso.analyzing');
-          state.isoLayout = null;
-          document.getElementById('isoLayoutInfo').style.display = 'none';
-          try {
-            state.isoSizeMb = await invoke('get_iso_size_mb', { path: state.isoPath });
-            state.isoLayout = await invoke('probe_iso_layout', { path: state.isoPath });
-            document.getElementById('isoStatus').innerHTML =
-              '<span style="color:var(--success);">' + t('iso.selected', { name: getFileName(state.isoPath) }) + '</span>' +
-              ' <span style="color:var(--text-faint);">(' + Math.round(state.isoSizeMb) + ' MB)</span>';
-            renderIsoLayout();
-            if (state.selectedPartition) selectPartition(state.partitions.indexOf(state.selectedPartition));
-          } catch (e) {
-            state.isoLayout = null;
-            document.getElementById('isoStatus').innerHTML =
-              '<span style="color:var(--error);">' + t('iso.analyze_fail') + ': ' + errText(e) + '</span>';
-          }
-          validateStep();
+          await applyIsoPath(selected);
         }
       } catch (err) {
         document.getElementById('isoStatus').innerHTML =

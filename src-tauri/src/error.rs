@@ -22,6 +22,7 @@ pub enum InstallerError {
     JsonParse(String),
     ImageOperation(String),
     InitramfsBuild(String),
+    Network(String),
 }
 
 impl InstallerError {
@@ -40,7 +41,8 @@ impl InstallerError {
             | Self::Io(m)
             | Self::JsonParse(m)
             | Self::ImageOperation(m)
-            | Self::InitramfsBuild(m) => m,
+            | Self::InitramfsBuild(m)
+            | Self::Network(m) => m,
         };
         let (code, params) = if raw.starts_with("ERR_") || raw.starts_with("progress.") {
             i18n::decode(raw)

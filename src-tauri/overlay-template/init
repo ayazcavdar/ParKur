@@ -90,6 +90,17 @@ modprobe squashfs    2>/dev/null || true
 modprobe ntfs3       2>/dev/null || true
 modprobe ntfs        2>/dev/null || true
 modprobe fuse        2>/dev/null || true
+# Some live ISOs (e.g. Pardus GNOME) omit ntfs3 from the stock initrd.
+# ParKur may inject ntfs3.ko into the overlay — load it explicitly if needed.
+if ! grep -qE 'ntfs' /proc/filesystems 2>/dev/null; then
+    for f in /lib/modules/*/kernel/fs/ntfs3/ntfs3.ko; do
+        if [ -f "$f" ]; then
+            log "insmod injected ntfs3: $f"
+            insmod "$f" 2>/dev/null || true
+            break
+        fi
+    done
+fi
 # Let udev settle after loading storage modules so device nodes appear
 udevadm trigger --subsystem-match=block 2>/dev/null || true
 udevadm settle  --timeout=10            2>/dev/null || true

@@ -1,5 +1,6 @@
 mod boot_ops;
 mod disk_ops;
+mod download_ops;
 mod error;
 mod i18n;
 mod image_ops;
@@ -72,6 +73,27 @@ async fn get_iso_size_mb(path: String) -> Result<u64, InstallerError> {
 #[tauri::command]
 async fn probe_iso_layout(path: String) -> Result<iso_ops::IsoLayoutInfo, InstallerError> {
     iso_ops::probe_iso_layout(&path)
+}
+
+#[tauri::command]
+async fn list_iso_catalog() -> Result<Vec<download_ops::IsoCatalogEntry>, InstallerError> {
+    Ok(download_ops::iso_catalog())
+}
+
+#[tauri::command]
+async fn get_iso_download_dir() -> Result<String, InstallerError> {
+    Ok(download_ops::download_dir()?.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn download_iso(app: tauri::AppHandle, id: String) -> Result<String, InstallerError> {
+    download_ops::download_iso(app, id).await
+}
+
+#[tauri::command]
+async fn cancel_iso_download() -> Result<(), InstallerError> {
+    download_ops::request_cancel_download();
+    Ok(())
 }
 
 #[tauri::command]
@@ -381,7 +403,24 @@ async fn start_installation(
 
     emit_key(&app, "boot", 76, "progress.build_overlay", &[]);
     let overlay_gz = temp_build.join("overlay.cpio.gz");
-    if let Err(e) = initramfs_ops::build_overlay_cpio_gz(&overlay_gz, &password) {
+    // Inject ntfs3.ko from the live squashfs so GNOME (and similar) images that
+    // omit NTFS from the stock initrd still mount the Windows host partition.
+    let ntfs_extras = match squashfs_ops::extract_ntfs3_module(Path::new(&squashfs_host)) {
+        Ok(Some(blob)) => {
+            emit_key(&app, "boot", 77, "progress.inject_ntfs", &[]);
+            vec![blob]
+        }
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            let _ = iso_ops::unmount_iso(&iso_path);
+            image_ops::remove_host_artifacts(&layout);
+            let _ = std::fs::remove_dir_all(&temp_build);
+            return Err(e);
+        }
+    };
+    if let Err(e) =
+        initramfs_ops::build_overlay_cpio_gz_with_extras(&overlay_gz, Some(&password), &ntfs_extras)
+    {
         let _ = iso_ops::unmount_iso(&iso_path);
         image_ops::remove_host_artifacts(&layout);
         let _ = std::fs::remove_dir_all(&temp_build);
@@ -552,6 +591,10 @@ pub fn run() {
             list_host_partitions,
             get_iso_size_mb,
             probe_iso_layout,
+            list_iso_catalog,
+            get_iso_download_dir,
+            download_iso,
+            cancel_iso_download,
             compute_disk_limits,
             detect_secure_boot,
             disable_fast_startup,

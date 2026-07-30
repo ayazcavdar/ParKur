@@ -2,11 +2,11 @@
 
 Windows üzerinden Pardus/Debian tabanlı **canlı (live)** ISO'ları, bölümleme yapmadan,
 NTFS üzerindeki tek bir `root.disk` dosyasının içine kuran masaüstü uygulaması
-(Wubi tarzı loop-mount mimarisi). Tauri v2 (Rust backend + vanilla HTML/CSS/JS frontend).
+(loop-mount mimarisi). Tauri v2 (Rust backend + vanilla HTML/CSS/JS frontend).
 
 UI/uygulama adı **ParKur**, boot girdisi ve disk üzerindeki artifact'lar **NextOS** olarak adlandırılır.
 
-## Mimari: Loop-Mount (Wubi tarzı)
+## Mimari: Loop-Mount
 
 Preseed/Debian Installer **kullanılmaz**; live ISO'nun squashfs'i doğrudan açılır:
 

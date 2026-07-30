@@ -247,35 +247,194 @@ fn initrd_host_path(iso_drive_letter: &str, initrd_rel: &str) -> String {
 pub fn probe_initrd_has_ntfs(initrd_path: &Path) -> Result<bool, InstallerError> {
     let raw = std::fs::read(initrd_path)
         .map_err(|e| InstallerError::Io(format!("initrd read failed: {}", e)))?;
-    let payload = decompress_initrd_payload(&raw)?;
-    Ok(initrd_payload_has_ntfs(&payload))
+    Ok(initrd_bytes_have_ntfs(&raw))
 }
 
-fn decompress_initrd_payload(raw: &[u8]) -> Result<Vec<u8>, InstallerError> {
-    if raw.len() >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
-        let mut dec = GzDecoder::new(raw);
-        let mut out = Vec::new();
-        dec.read_to_end(&mut out).map_err(|e| {
-            InstallerError::IsoExtraction(format!("initrd gzip decompress failed: {}", e))
-        })?;
-        return Ok(out);
+fn is_gzip(data: &[u8]) -> bool {
+    data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b
+}
+
+fn is_zstd(data: &[u8]) -> bool {
+    data.len() >= 4 && data[0] == 0x28 && data[1] == 0xb5 && data[2] == 0x2f && data[3] == 0xfd
+}
+
+fn try_gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
+    let mut dec = GzDecoder::new(data);
+    let mut out = Vec::new();
+    if dec.read_to_end(&mut out).is_ok() && !out.is_empty() {
+        Some(out)
+    } else {
+        None
     }
-    Ok(raw.to_vec())
+}
+
+fn try_zstd_decompress(data: &[u8]) -> Option<Vec<u8>> {
+    zstd::stream::decode_all(data).ok().filter(|o| !o.is_empty())
+}
+
+/// Skip leading uncompressed newc cpio archives (microcode / early initramfs).
+fn skip_leading_cpio(data: &[u8]) -> &[u8] {
+    let mut offset = 0usize;
+    while data.len() >= offset + 110 && &data[offset..offset + 6] == b"070701" {
+        let hdr = &data[offset..offset + 110];
+        let namesize = usize::from_str_radix(
+            std::str::from_utf8(&hdr[94..102]).unwrap_or(""),
+            16,
+        )
+        .unwrap_or(0);
+        let filesize = usize::from_str_radix(
+            std::str::from_utf8(&hdr[54..62]).unwrap_or(""),
+            16,
+        )
+        .unwrap_or(0);
+        if namesize == 0 {
+            break;
+        }
+        let name_off = offset + 110;
+        let name_end = name_off.saturating_add(namesize);
+        if name_end > data.len() {
+            break;
+        }
+        let name = &data[name_off..name_end.saturating_sub(1)]; // strip NUL
+        let name_pad = (4 - (name_end % 4)) % 4;
+        let data_off = name_end + name_pad;
+        let data_end = data_off.saturating_add(filesize);
+        if data_end > data.len() {
+            break;
+        }
+        let data_pad = (4 - (data_end % 4)) % 4;
+        offset = data_end + data_pad;
+        if name == b"TRAILER!!!" {
+            // Keep skipping if another uncompressed cpio follows.
+            continue;
+        }
+    }
+    &data[offset.min(data.len())..]
+}
+
+fn collect_initrd_scan_buffers(raw: &[u8]) -> Vec<Vec<u8>> {
+    let mut bufs: Vec<Vec<u8>> = Vec::new();
+    let push_unique = |bufs: &mut Vec<Vec<u8>>, b: Vec<u8>| {
+        if !bufs.iter().any(|x| x.len() == b.len() && x == &b) {
+            bufs.push(b);
+        }
+    };
+
+    push_unique(&mut bufs, raw.to_vec());
+
+    // After early uncompressed cpio (+ NUL padding), locate gzip/zstd payload.
+    // Pardus/Debian live initrds often place zstd tens of MB into the file.
+    let mut offsets: Vec<usize> = Vec::new();
+    let after = skip_leading_cpio(raw);
+    let after_off = raw.len().saturating_sub(after.len());
+    let mut pad = after_off;
+    while pad < raw.len() && raw[pad] == 0 {
+        pad += 1;
+    }
+    if pad < raw.len() {
+        offsets.push(pad);
+    }
+    for i in 0..raw.len().saturating_sub(4) {
+        if is_zstd(&raw[i..]) || is_gzip(&raw[i..]) {
+            offsets.push(i);
+            break; // first compressor frame is the main initramfs
+        }
+    }
+
+    for off in offsets {
+        let chunk = &raw[off..];
+        if is_gzip(chunk) {
+            if let Some(d) = try_gzip_decompress(chunk) {
+                push_unique(&mut bufs, d);
+            }
+        }
+        if is_zstd(chunk) {
+            if let Some(d) = try_zstd_decompress(chunk) {
+                push_unique(&mut bufs, d);
+            }
+        }
+    }
+
+    bufs
+}
+
+fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 fn initrd_payload_has_ntfs(payload: &[u8]) -> bool {
     const NEEDLES: &[&[u8]] = &[
         b"ntfs3.ko",
         b"ntfs.ko",
+        b"ntfs3.ko.xz",
+        b"ntfs3.ko.zst",
+        b"ntfs.ko.xz",
         b"kernel/fs/ntfs",
         b"kernel/fs/ntfs3",
         b"modules/ntfs",
         b"modules/ntfs3",
+        b"bin/ntfs-3g",
+        b"sbin/ntfs-3g",
         b"ntfs-3g",
     ];
-    NEEDLES
+    NEEDLES.iter().any(|needle| bytes_contain(payload, needle))
+}
+
+fn initrd_bytes_have_ntfs(raw: &[u8]) -> bool {
+    collect_initrd_scan_buffers(raw)
         .iter()
-        .any(|needle| payload.windows(needle.len()).any(|w| w == *needle))
+        .any(|buf| initrd_payload_has_ntfs(buf))
+}
+
+#[cfg(test)]
+mod ntfs_probe_tests {
+    use super::*;
+
+    #[test]
+    fn detects_ntfs3_in_plain_cpio_bytes() {
+        let mut buf = b"070701....kernel/fs/ntfs3/ntfs3.ko\0".to_vec();
+        assert!(initrd_payload_has_ntfs(&buf));
+        buf = b"no filesystem here".to_vec();
+        assert!(!initrd_payload_has_ntfs(&buf));
+    }
+
+    #[test]
+    fn probe_testdata_initrd_if_present() {
+        let path = std::path::Path::new("testdata-initrd.img");
+        if !path.exists() {
+            eprintln!("skip: testdata-initrd.img missing");
+            return;
+        }
+        let raw = std::fs::read(path).expect("read testdata");
+        eprintln!("size={}", raw.len());
+        eprintln!("head={:?}", String::from_utf8_lossy(&raw[..6.min(raw.len())]));
+
+        let rest = skip_leading_cpio(&raw);
+        eprintln!(
+            "after_cpio_skip offset={} remaining={}",
+            raw.len() - rest.len(),
+            rest.len()
+        );
+        if rest.len() >= 4 {
+            eprintln!(
+                "rest_magic={:02x} {:02x} {:02x} {:02x}",
+                rest[0], rest[1], rest[2], rest[3]
+            );
+        }
+
+        let mut zstd_off = None;
+        for i in 0..raw.len().saturating_sub(4) {
+            if is_zstd(&raw[i..]) {
+                zstd_off = Some(i);
+                break;
+            }
+        }
+        eprintln!("first_zstd_off={:?}", zstd_off);
+
+        let hit = initrd_bytes_have_ntfs(&raw);
+        eprintln!("has_ntfs={}", hit);
+        assert!(hit, "expected NTFS modules in Pardus live initrd");
+    }
 }
 
 /// Mount the ISO briefly and derive sizing guidance from its squashfs payload.
@@ -288,6 +447,11 @@ pub fn probe_iso_layout(iso_path: &str) -> Result<IsoLayoutInfo, InstallerError>
         let has_ntfs_in_initrd = probe_initrd_has_ntfs(Path::new(&initrd_path))?;
         let squashfs_rel = find_squashfs_path(&iso_drive)?;
         let squashfs_path = squashfs_host_path(&iso_drive, &squashfs_rel);
+        // Some desktop live images (e.g. Pardus GNOME) omit ntfs3 from the
+        // stock initrd even though the squashfs ships the module. Treat either
+        // as installable — the installer injects the module into our overlay.
+        let has_ntfs_in_squashfs = squashfs_ops::squashfs_has_ntfs3(Path::new(&squashfs_path))?;
+        let has_ntfs_in_initrd = has_ntfs_in_initrd || has_ntfs_in_squashfs;
         let compressed = std::fs::metadata(&squashfs_path)
             .map_err(|e| InstallerError::Io(format!("squashfs stat failed: {}", e)))?
             .len();
